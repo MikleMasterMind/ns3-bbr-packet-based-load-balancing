@@ -3,350 +3,330 @@
 #include "ns3/internet-module.h"
 #include "ns3/point-to-point-module.h"
 #include "ns3/applications-module.h"
-#include "ns3/traffic-control-module.h"
 #include "ns3/flow-monitor-module.h"
+#include "ns3/per-packet-load-balancer.h"
 
 using namespace ns3;
 
-NS_LOG_COMPONENT_DEFINE("PacketRoundRobinBalancer");
+NS_LOG_COMPONENT_DEFINE ("PerPacketLoadBalancerExperiment");
 
-// Балансировщик нагрузки с round-robin распределением пакетов
-// Работает как NAT: меняет IP адреса в заголовках пакетов
-class PacketRoundRobinBalancer : public Application {
-public:
-    PacketRoundRobinBalancer() : m_nextChannel(0) {}
+int main (int argc, char *argv[])
+{
+  // Включаем подробное логирование для отладки
+  LogComponentEnable ("PerPacketLoadBalancerExperiment", LOG_LEVEL_ALL);
 
-    static TypeId GetTypeId() {
-        static TypeId tid = TypeId("PacketRoundRobinBalancer")
-            .SetParent<Application>()
-            .SetGroupName("LoadBalancing")
-            .AddConstructor<PacketRoundRobinBalancer>();
-        return tid;
-    }
+  // ==========================================================================
+  // НАСТРОЙКА ПАРАМЕТРОВ ЭКСПЕРИМЕНТА
+  // ==========================================================================
+  Time simulationTime = Seconds (10);  // Общее время симуляции
+  uint32_t numPaths = 4;               // Количество параллельных путей от балансировщика к серверу
+  uint32_t badPathIndex = 3;           // Индекс "плохого" пути (нумерация с 0)
+  Time goodLinkDelay = MilliSeconds (1);       // Нормальная задержка на хороших путях
+  Time badLinkDelay = MilliSeconds (50);       // Большая задержка на плохом пути
+  
+  // Обработка аргументов командной строки для гибкой настройки эксперимента
+  CommandLine cmd;
+  cmd.AddValue ("simulationTime", "Время симуляции в секундах", simulationTime);
+  cmd.AddValue ("numPaths", "Количество параллельных путей", numPaths);
+  cmd.Parse (argc, argv);
 
-    // Инициализация балансировщика
-    void Setup(Ptr<Node> balancerNode, 
-               std::vector<Ptr<NetDevice>> serverDevices,
-               Ptr<NetDevice> clientDevice,
-               std::vector<Ipv4Address> serverAddresses) {
-        m_balancerNode = balancerNode;
-        m_serverDevices = serverDevices;
-        m_clientDevice = clientDevice;
-        m_serverAddresses = serverAddresses;
-    }
+  // ==========================================================================
+  // СОЗДАНИЕ СЕТЕВЫХ УЗЛОВ
+  // ==========================================================================
+  // Архитектура сети:
+  // [Клиент] → [Балансировщик] → [Маршрутизаторы R1-R4] → [Сервер]
+  // Балансировщик распределяет пакеты случайно между всеми путями
+  // Один из путей (badPathIndex) имеет худшие характеристики
+  
+  NS_LOG_INFO ("Создание сетевых узлов...");
+  NodeContainer clientNode;           // Узел-отправитель данных
+  NodeContainer balancerNode;         // Узел с Per-Packet Load Balancer
+  NodeContainer serverNode;           // Узел-получатель данных
+  NodeContainer routerNodes;          // Промежуточные маршрутизаторы (по одному на каждый путь)
+  
+  clientNode.Create (1);
+  balancerNode.Create (1);
+  serverNode.Create (1);
+  routerNodes.Create (numPaths);
 
-protected:
-    virtual void StartApplication() override {
-        NS_LOG_INFO("Starting PacketRoundRobinBalancer on node " << m_balancerNode->GetId());
-        SetupPacketHandlers();
-        NS_LOG_INFO("Balancer started with " << m_serverDevices.size() << " channels");
-    }
+  // ==========================================================================
+  // НАСТРОЙКА СЕТЕВЫХ СОЕДИНЕНИЙ И СТЕКА TCP/IP
+  // ==========================================================================
+  PointToPointHelper p2p;             // Хелпер для создания point-to-point соединений
+  InternetStackHelper internet;       // Хелпер для установки TCP/IP стека
+  
+  // Устанавливаем стек интернет-протоколов на всех узлах
+  internet.Install (clientNode);
+  internet.Install (balancerNode);
+  internet.Install (serverNode);
+  internet.Install (routerNodes);
 
-    virtual void StopApplication() override {
-        if (m_clientDevice) {
-            m_clientDevice->SetPromiscReceiveCallback(MakeNullCallback<bool, Ptr<NetDevice>, Ptr<const Packet>, uint16_t, const Address&, const Address&, NetDevice::PacketType>());
-        }
-        for (auto& device : m_serverDevices) {
-            if (device) {
-                device->SetPromiscReceiveCallback(MakeNullCallback<bool, Ptr<NetDevice>, Ptr<const Packet>, uint16_t, const Address&, const Address&, NetDevice::PacketType>());
-            }
-        }
-        NS_LOG_INFO("Stopping PacketRoundRobinBalancer");
-    }
+  // Контейнеры для сетевых устройств (адаптеров)
+  std::vector<NetDeviceContainer> balancerToRouterDevices;  // Балансировщик → Маршрутизаторы
+  std::vector<NetDeviceContainer> routerToServerDevices;    // Маршрутизаторы → Сервер
+  NetDeviceContainer clientToBalancerDevice;                // Клиент → Балансировщик
 
-private:
-    Ptr<Node> m_balancerNode;
-    std::vector<Ptr<NetDevice>> m_serverDevices;  // Устройства к серверам
-    Ptr<NetDevice> m_clientDevice;                // Устройство к клиенту
-    std::vector<Ipv4Address> m_serverAddresses;   // Реальные адреса серверов
-    uint32_t m_nextChannel;                       // Счетчик для round-robin
+  // Создание высокоскоростного соединения Клиент → Балансировщик
+  // Это соединение не должно быть бутылочным горлышем
+  p2p.SetDeviceAttribute ("DataRate", StringValue ("10Gbps"));
+  p2p.SetChannelAttribute ("Delay", StringValue ("1ms"));
+  clientToBalancerDevice = p2p.Install (clientNode.Get (0), balancerNode.Get (0));
 
-    // Настройка перехвата пакетов на сетевых устройствах
-    void SetupPacketHandlers() {
-        if (!m_clientDevice) {
-            NS_LOG_ERROR("Client device is null");
-            return;
-        }
-        
-        // Перехват пакетов от клиента (все пакеты, не только адресованные балансировщику)
-        m_clientDevice->SetPromiscReceiveCallback(MakeCallback(&PacketRoundRobinBalancer::HandlePacketFromClient, this));
-        
-        // Перехват пакетов от серверов
-        for (auto& serverDevice : m_serverDevices) {
-            if (serverDevice) {
-                serverDevice->SetPromiscReceiveCallback(MakeCallback(&PacketRoundRobinBalancer::HandlePacketFromServer, this));
-            }
-        }
-        
-        NS_LOG_INFO("Packet handlers setup complete");
-    }
-
-    // Обработка пакетов, идущих от клиента к балансировщику
-    bool HandlePacketFromClient(Ptr<NetDevice> device, Ptr<const Packet> packet, 
-                               uint16_t protocol, const Address& from, 
-                               const Address& to, NetDevice::PacketType packetType) {
-        if (protocol != 0x0800) return false;  // Только IP пакеты
-        
-        NS_LOG_INFO("CLIENT->BALANCER: Packet size: " << packet->GetSize());
-        
-        if (m_serverDevices.empty()) {
-            NS_LOG_ERROR("No server devices available");
-            return false;
-        }
-        
-        // Round-robin алгоритм: циклический выбор канала
-        uint32_t channelId = m_nextChannel;
-        m_nextChannel = (m_nextChannel + 1) % m_serverDevices.size();
-        
-        NS_LOG_INFO("Round-robin: forwarding via channel " << channelId);
-        
-        // Пересылка с изменением IP заголовка
-        ForwardToServer(packet, channelId);
-        
-        return true;  // Пакет поглощен, предотвращаем дальнейшую обработку
-    }
-
-    // Обработка пакетов, идущих от сервера к балансировщику
-    bool HandlePacketFromServer(Ptr<NetDevice> device, Ptr<const Packet> packet, 
-                               uint16_t protocol, const Address& from, 
-                               const Address& to, NetDevice::PacketType packetType) {
-        if (protocol != 0x0800) return false;  // Только IP пакеты
-        
-        NS_LOG_INFO("SERVER->BALANCER: Packet size: " << packet->GetSize());
-        
-        // Пересылка ответа клиенту с изменением IP заголовка
-        ForwardToClient(packet);
-        
-        return true;  // Пакет поглощен
-    }
-
-    // Пересылка пакета к серверу с модификацией destination IP
-    void ForwardToServer(Ptr<const Packet> packet, uint32_t channelId) {
-        if (channelId >= m_serverDevices.size()) {
-            NS_LOG_ERROR("Invalid channel ID: " << channelId);
-            return;
-        }
-
-        Ptr<NetDevice> serverDevice = m_serverDevices[channelId];
-        if (!serverDevice) {
-            NS_LOG_ERROR("Server device is null for channel " << channelId);
-            return;
-        }
-
-        // Создаем копию пакета для модификации
-        Ptr<Packet> modifiedPacket = packet->Copy();
-        
-        // Извлекаем IP заголовок
-        Ipv4Header ipHeader;
-        if (modifiedPacket->RemoveHeader(ipHeader) == 0) {
-            NS_LOG_ERROR("Failed to remove IP header");
-            return;
-        }
-
-        // NAT: меняем адрес назначения на реальный адрес сервера
-        // Клиент отправляет на 10.1.1.2, балансировщик меняет на 10.1.2.2 или 10.1.3.2
-        Ipv4Address serverAddress = m_serverAddresses[channelId];
-        ipHeader.SetDestination(serverAddress);
-        
-        ipHeader.EnableChecksum();  // Пересчет контрольной суммы
-        
-        modifiedPacket->AddHeader(ipHeader);
-        
-        NS_LOG_INFO("Modified packet: " << ipHeader.GetSource() << " -> " << ipHeader.GetDestination());
-        
-        // Отправка модифицированного пакета серверу
-        serverDevice->Send(modifiedPacket, serverDevice->GetBroadcast(), 0x0800);
-        
-        NS_LOG_INFO("Packet forwarded to server " << serverAddress << " via channel " << channelId);
-    }
-
-    // Пересылка пакета клиенту с модификацией source IP
-    void ForwardToClient(Ptr<const Packet> packet) {
-        if (!m_clientDevice) {
-            NS_LOG_ERROR("Client device is null");
-            return;
-        }
-
-        // Создаем копию пакета для модификации
-        Ptr<Packet> modifiedPacket = packet->Copy();
-        
-        // Извлекаем IP заголовок
-        Ipv4Header ipHeader;
-        if (modifiedPacket->RemoveHeader(ipHeader) == 0) {
-            NS_LOG_ERROR("Failed to remove IP header");
-            return;
-        }
-
-        // NAT: меняем адрес источника на адрес балансировщика
-        // Клиент должен думать, что ответ пришел от балансировщика (10.1.1.2)
-        Ipv4Address balancerAddress = GetBalancerAddress();
-        ipHeader.SetSource(balancerAddress);
-        
-        ipHeader.EnableChecksum();  // Пересчет контрольной суммы
-        
-        modifiedPacket->AddHeader(ipHeader);
-        
-        NS_LOG_INFO("Modified response: " << ipHeader.GetSource() << " -> " << ipHeader.GetDestination());
-        
-        // Отправка модифицированного пакета клиенту
-        m_clientDevice->Send(modifiedPacket, m_clientDevice->GetBroadcast(), 0x0800);
-        
-        NS_LOG_INFO("Packet forwarded to client");
-    }
-
-    // Получение IP адреса балансировщика на интерфейсе к клиенту
-    Ipv4Address GetBalancerAddress() {
-        Ptr<Ipv4> ipv4 = m_balancerNode->GetObject<Ipv4>();
-        if (!ipv4) {
-            NS_LOG_ERROR("Failed to get Ipv4 object");
-            return Ipv4Address();
-        }
-        
-        return ipv4->GetAddress(1, 0).GetLocal();  // Интерфейс 1: клиентская сеть
-    }
-};
-
-int main(int argc, char *argv[]) {
-    LogComponentEnable("PacketRoundRobinBalancer", LOG_LEVEL_INFO);
-
-    /*
-     * КОНФИГУРАЦИЯ СЕТИ:
-     * 
-     * Топология:
-     * Node 0 (Клиент) --- Node 1 (Балансировщик) --- Node 2 (Сервер)
-     *                           |          |
-     *                           |          |
-     *                    (канал 0)    (канал 1)
-     * 
-     * IP АДРЕСА:
-     * - Клиент (Node 0): 10.1.1.1
-     * - Балансировщик (Node 1): 
-     *   * Клиентский интерфейс: 10.1.1.2
-     *   * Серверный интерфейс 0: 10.1.2.1  
-     *   * Серверный интерфейс 1: 10.1.3.1
-     * - Сервер (Node 2):
-     *   * Интерфейс канала 0: 10.1.2.2
-     *   * Интерфейс канала 1: 10.1.3.2
-     * 
-     * ЛОГИКА РАБОТЫ:
-     * 1. Клиент отправляет пакеты на 10.1.1.2 (балансировщик)
-     * 2. Балансировщик round-robin распределяет пакеты по каналам
-     * 3. Для каждого пакета меняет destination IP на 10.1.2.2 или 10.1.3.2
-     * 4. Сервер обрабатывает пакет и отправляет ответ
-     * 5. Балансировщик перехватывает ответ и меняет source IP на 10.1.1.2
-     * 6. Клиент получает ответ, думая что он от балансировщика
-     */
-
-    double simulationTime = 10.0;
-    uint32_t numChannels = 2;
-
-    // Создание сетевых узлов
-    NodeContainer nodes;
-    nodes.Create(3);  // 0-клиент, 1-балансировщик, 2-сервер
-
-    // Настройка point-to-point каналов
-    PointToPointHelper p2p;
-    p2p.SetDeviceAttribute("DataRate", StringValue("1Mbps"));
-    p2p.SetChannelAttribute("Delay", StringValue("2ms"));
-
-    // Создание двух каналов между балансировщиком и сервером
-    std::vector<NetDeviceContainer> serverChannels;
-    for (uint32_t i = 0; i < numChannels; ++i) {
-        serverChannels.push_back(p2p.Install(NodeContainer(nodes.Get(1), nodes.Get(2))));
-        NS_LOG_INFO("Created server channel " << i);
-    }
-
-    // Создание канала между клиентом и балансировщиком
-    NetDeviceContainer clientChannel = p2p.Install(NodeContainer(nodes.Get(0), nodes.Get(1)));
-
-    // Установка TCP/IP стека на все узлы
-    InternetStackHelper stack;
-    stack.Install(nodes);
-
-    // Назначение IP адресов
-    Ipv4AddressHelper address;
-    
-    // Сеть клиент-балансировщик: 10.1.1.0/24
-    address.SetBase("10.1.1.0", "255.255.255.0");
-    Ipv4InterfaceContainer clientBalancerIfaces = address.Assign(clientChannel);
-    
-    // Сети балансировщик-сервер: 10.1.2.0/24 и 10.1.3.0/24
-    std::vector<Ipv4InterfaceContainer> serverIfaces;
-    for (uint32_t i = 0; i < serverChannels.size(); ++i) {
-        std::string base = "10.1." + std::to_string(i + 2) + ".0";
-        address.SetBase(base.c_str(), "255.255.255.0");
-        serverIfaces.push_back(address.Assign(serverChannels[i]));
-        NS_LOG_INFO("Server channel " << i << ": " << base);
-    }
-
-    // Настройка маршрутизации
-    Ipv4GlobalRoutingHelper::PopulateRoutingTables();
-
-    // Подготовка устройств для балансировщика
-    std::vector<Ptr<NetDevice>> serverDevices;
-    std::vector<Ipv4Address> serverAddresses;
-    
-    // Сбор серверных устройств балансировщика и реальных адресов сервера
-    for (uint32_t i = 0; i < serverChannels.size(); ++i) {
-        serverDevices.push_back(serverChannels[i].Get(0));  // Устройство балансировщика
-        serverAddresses.push_back(serverIfaces[i].GetAddress(1));  // Адрес сервера
-        NS_LOG_INFO("Server " << i << " address: " << serverAddresses.back());
+  // Создание соединений Балансировщик → Маршрутизаторы
+  // Здесь создаются multiple пути с разными характеристиками
+  p2p.SetDeviceAttribute ("DataRate", StringValue ("1Gbps"));
+  for (uint32_t i = 0; i < numPaths; i++)
+  {
+    // Настройка параметров в зависимости от того, "плохой" это путь или нет
+    if (i == badPathIndex) {
+      // "Плохой" путь: низкая пропускная способность и большая задержка
+      p2p.SetDeviceAttribute ("DataRate", StringValue ("500Mbps"));
+      p2p.SetChannelAttribute ("Delay", StringValue ("50ms"));
+    } else {
+      // "Хорошие" пути: нормальная пропускная способность и малая задержка
+      p2p.SetDeviceAttribute ("DataRate", StringValue ("1Gbps"));
+      p2p.SetChannelAttribute ("Delay", StringValue ("1ms"));
     }
     
-    // Устройство балансировщика для связи с клиентом
-    Ptr<NetDevice> clientDevice = clientChannel.Get(1);
+    // Создание соединения между балансировщиком и i-м маршрутизатором
+    NetDeviceContainer devices = p2p.Install (balancerNode.Get (0), routerNodes.Get (i));
+    balancerToRouterDevices.push_back (devices);
+  }
 
-    // Серверное приложение - приемник TCP трафика
-    uint16_t port = 5000;
-    PacketSinkHelper sinkHelper("ns3::TcpSocketFactory", 
-                               InetSocketAddress(Ipv4Address::GetAny(), port));
-    ApplicationContainer serverApps = sinkHelper.Install(nodes.Get(2));
-    serverApps.Start(Seconds(0.0));
-    serverApps.Stop(Seconds(simulationTime));
+  // Создание соединений Маршрутизаторы → Сервер
+  // Все эти соединения одинаковые - разница только в предыдущем сегменте
+  p2p.SetDeviceAttribute ("DataRate", StringValue ("1Gbps"));
+  p2p.SetChannelAttribute ("Delay", StringValue ("1ms"));
+  for (uint32_t i = 0; i < numPaths; i++)
+  {
+    NetDeviceContainer devices = p2p.Install (routerNodes.Get (i), serverNode.Get (0));
+    routerToServerDevices.push_back (devices);
+  }
 
-    // Клиентское приложение - отправитель TCP трафика
-    BulkSendHelper clientHelper("ns3::TcpSocketFactory", 
-                              InetSocketAddress(clientBalancerIfaces.GetAddress(1), port));
-    clientHelper.SetAttribute("MaxBytes", UintegerValue(100000));
+  // ==========================================================================
+  // ВКЛЮЧЕНИЕ ТРАССИРОВКИ ПАКЕТОВ
+  // ==========================================================================
+  NS_LOG_INFO ("Включение трассировки пакетов...");
+  p2p.EnableAsciiAll ("per-packet-balancer");
+  p2p.EnablePcapAll ("per-packet-balancer");
+
+  // ==========================================================================
+  // НАСТРОЙКА IP-АДРЕСАЦИИ
+  // ==========================================================================
+  NS_LOG_INFO ("Настройка IP-адресации...");
+  Ipv4AddressHelper ipv4;  // Хелпер для назначения IP-адресов
+
+  // Назначение адресов для соединения Клиент-Балансировщик
+  ipv4.SetBase ("10.1.1.0", "255.255.255.0");
+  Ipv4InterfaceContainer clientToBalancerInterface = ipv4.Assign (clientToBalancerDevice);
+
+  // Назначение адресов для соединений Балансировщик-Маршрутизаторы
+  // Каждое соединение получает свою маленькую подсеть /30
+  std::vector<Ipv4InterfaceContainer> balancerToRouterInterfaces;
+  for (uint32_t i = 0; i < numPaths; i++)
+  {
+    std::ostringstream network;
+    network << "10.1.2." << i * 4;  // 10.1.2.0, 10.1.2.4, 10.1.2.8, ...
+    ipv4.SetBase (network.str ().c_str (), "255.255.255.252");  // /30 подсеть (2 usable адреса)
+    Ipv4InterfaceContainer interfaces = ipv4.Assign (balancerToRouterDevices[i]);
+    balancerToRouterInterfaces.push_back (interfaces);
+  }
+
+  // Назначение адресов для соединений Маршрутизаторы-Сервер
+  std::vector<Ipv4InterfaceContainer> routerToServerInterfaces;
+  for (uint32_t i = 0; i < numPaths; i++)
+  {
+    std::ostringstream network;
+    network << "10.1.3." << i * 4;  // 10.1.3.0, 10.1.3.4, 10.1.3.8, ...
+    ipv4.SetBase (network.str ().c_str (), "255.255.255.252");
+    Ipv4InterfaceContainer interfaces = ipv4.Assign (routerToServerDevices[i]);
+    routerToServerInterfaces.push_back (interfaces);
+  }
+
+  // ==========================================================================
+  // НАЗНАЧЕНИЕ АДРЕСА СЕРВЕРУ
+  // ==========================================================================
+  NS_LOG_INFO ("Назначение адреса серверу...");
+  Ipv4InterfaceContainer serverInterfaces;
+  ipv4.SetBase ("10.1.4.0", "255.255.255.0");
+  
+  // Сервер получает статический адрес 10.1.4.1 на всех интерфейсах
+  Ptr<Ipv4> serverIpv4 = serverNode.Get(0)->GetObject<Ipv4>();
+  for (uint32_t i = 0; i < numPaths; i++) {
+    uint32_t interfaceIndex = serverIpv4->GetInterfaceForDevice(routerToServerDevices[i].Get(1));
+    Ipv4InterfaceAddress serverAddress = Ipv4InterfaceAddress(Ipv4Address("10.1.4.1"), Ipv4Mask("255.255.255.0"));
+    serverIpv4->AddAddress(interfaceIndex, serverAddress);
+    serverIpv4->SetMetric(interfaceIndex, 1);
+    serverIpv4->SetUp(interfaceIndex);
+  }
+
+  // ==========================================================================
+  // НАСТРОЙКА PER-PACKET LOAD BALANCER
+  // ==========================================================================
+  NS_LOG_INFO ("Настройка Per-Packet Load Balancer...");
+  
+  // Создание и настройка нашего кастомного балансировщика
+  Ptr<PerPacketLoadBalancer> loadBalancer = CreateObject<PerPacketLoadBalancer> ();
+  Ptr<Ipv4> balancerIpv4 = balancerNode.Get (0)->GetObject<Ipv4> ();
+  
+  // Установка балансировщика как основного протокола маршрутизации
+  balancerIpv4->SetRoutingProtocol (loadBalancer);
+
+  // Добавление multiple маршрутов к одной и той же сети назначения
+  // Это ключевой момент: несколько путей к одной сети через разные интерфейсы
+  for (uint32_t i = 0; i < numPaths; i++)
+  {
+    // Шлюзом является адрес маршрутизатора на другом конце соединения
+    Ipv4Address gateway = balancerToRouterInterfaces[i].GetAddress (1);
     
-    ApplicationContainer clientApps = clientHelper.Install(nodes.Get(0));
-    clientApps.Start(Seconds(1.0));
-    clientApps.Stop(Seconds(simulationTime - 1));
+    // Добавление маршрута к сети 10.1.4.0/24 через i-й интерфейс
+    // Интерфейс i+1 потому что интерфейс 0 занят соединением с клиентом
+    loadBalancer->AddNetworkRouteTo (Ipv4Address ("10.1.4.0"), 
+                                    Ipv4Mask ("255.255.255.0"), 
+                                    gateway, 
+                                    i + 1);
+    
+    NS_LOG_INFO("Добавлен маршрут через интерфейс " << i+1 << " шлюз " << gateway);
+  }
 
-    // Установка и запуск балансировщика
-    Ptr<PacketRoundRobinBalancer> balancer = CreateObject<PacketRoundRobinBalancer>();
-    balancer->Setup(nodes.Get(1), serverDevices, clientDevice, serverAddresses);
-    nodes.Get(1)->AddApplication(balancer);
-    balancer->SetStartTime(Seconds(0.5));
-    balancer->SetStopTime(Seconds(simulationTime));
+  // ==========================================================================
+  // НАСТРОЙКА СТАТИЧЕСКОЙ МАРШРУТИЗАЦИИ НА МАРШРУТИЗАТОРАХ
+  // ==========================================================================
+  NS_LOG_INFO ("Настройка статической маршрутизации на маршрутизаторах...");
+  for (uint32_t i = 0; i < numPaths; i++)
+  {
+    Ptr<Ipv4StaticRouting> routerRouting = Ipv4RoutingHelper::GetRouting <Ipv4StaticRouting> (
+        routerNodes.Get(i)->GetObject<Ipv4>()->GetRoutingProtocol());
+    
+    // Получение индекса интерфейса, подключенного к серверу
+    uint32_t serverInterfaceIndex = routerNodes.Get(i)->GetObject<Ipv4>()->GetInterfaceForDevice(
+        routerToServerDevices[i].Get(1));
+    
+    // Маршрут от маршрутизатора к серверу - прямое соединение
+    routerRouting->AddHostRouteTo(Ipv4Address("10.1.4.1"), 
+                                 routerToServerInterfaces[i].GetAddress(1),
+                                 serverInterfaceIndex);
+    
+    // Получение индекса интерфейса, подключенного к балансировщику
+    uint32_t balancerInterfaceIndex = routerNodes.Get(i)->GetObject<Ipv4>()->GetInterfaceForDevice(
+        balancerToRouterDevices[i].Get(1));
+    
+    // Маршрут от маршрутизатора к клиенту через балансировщик
+    routerRouting->AddHostRouteTo(Ipv4Address("10.1.1.1"),
+                                 balancerToRouterInterfaces[i].GetAddress(0),
+                                 balancerInterfaceIndex);
+  }
 
-    // Включение трассировки для анализа
-    AsciiTraceHelper ascii;
-    p2p.EnableAsciiAll(ascii.CreateFileStream("trace.tr"));
+  // ==========================================================================
+  // НАСТРОЙКА СТАТИЧЕСКОЙ МАРШРУТИЗАЦИИ НА СЕРВЕРЕ
+  // ==========================================================================
+  NS_LOG_INFO ("Настройка статической маршрутизации на сервере...");
+  Ptr<Ipv4StaticRouting> serverRouting = Ipv4RoutingHelper::GetRouting <Ipv4StaticRouting> (
+      serverNode.Get(0)->GetObject<Ipv4>()->GetRoutingProtocol());
+  
+  // Добавление маршрутов от сервера к клиенту через все маршрутизаторы
+  for (uint32_t i = 0; i < numPaths; i++) {
+    uint32_t interfaceIndex = serverIpv4->GetInterfaceForDevice(routerToServerDevices[i].Get(1));
+    serverRouting->AddHostRouteTo(Ipv4Address("10.1.1.1"),
+                                 routerToServerInterfaces[i].GetAddress(0),
+                                 interfaceIndex);
+  }
 
-    // Вывод конфигурации сети
-    NS_LOG_INFO("=== NETWORK CONFIGURATION ===");
-    NS_LOG_INFO("Client IP: " << clientBalancerIfaces.GetAddress(0));
-    NS_LOG_INFO("Balancer IP: " << clientBalancerIfaces.GetAddress(1));
-    for (uint32_t i = 0; i < serverAddresses.size(); ++i) {
-        NS_LOG_INFO("Real Server " << i << " IP: " << serverAddresses[i]);
+  // ==========================================================================
+  // НАСТРОЙКА ПРИЛОЖЕНИЙ ДЛЯ ГЕНЕРАЦИИ ТРАФИКА
+  // ==========================================================================
+  NS_LOG_INFO ("Настройка приложений...");
+  
+  // TCP-сервер (приемник данных) на узле-сервере
+  uint16_t serverPort = 5000;
+  // Сервер "живет" по адресу 10.1.4.1 - это виртуальный адрес, к которому обращается клиент
+  Address serverAddress (InetSocketAddress (Ipv4Address ("10.1.4.1"), serverPort));
+  
+  // Создание TCP-сервера, который будет принимать входящие соединения
+  PacketSinkHelper packetSinkHelper ("ns3::TcpSocketFactory", serverAddress);
+  ApplicationContainer serverApp = packetSinkHelper.Install (serverNode.Get (0));
+  serverApp.Start (Seconds (0.0));     // Сервер запускается сразу
+  serverApp.Stop (simulationTime);     // Работает до конца симуляции
+
+  // TCP-клиент (отправитель данных) на узле-клиенте
+  BulkSendHelper bulkSend ("ns3::TcpSocketFactory", serverAddress);
+  bulkSend.SetAttribute ("MaxBytes", UintegerValue (0));      // Бесконечная передача
+  bulkSend.SetAttribute ("SendSize", UintegerValue (1460));   // Размер TCP-сегмента
+  
+  ApplicationContainer clientApp = bulkSend.Install (clientNode.Get (0));
+  clientApp.Start (Seconds (1.0));     // Клиент начинает через 1 секунду
+  clientApp.Stop (simulationTime - Seconds (1));  // Заканчивает за 1 секунду до конца
+
+  // ==========================================================================
+  // НАСТРОЙКА TCP BBR - АЛГОРИТМА УПРАВЛЕНИЯ ПЕРЕГРУЗКОЙ
+  // ==========================================================================
+  NS_LOG_INFO ("Настройка TCP BBR...");
+  
+  // Установка BBR (Bottleneck Bandwidth and Round-trip propagation time) как алгоритма перегрузки
+  // BBR особенно чувствителен к вариациям RTT, что делает его идеальным для демонстрации проблемы
+  Config::SetDefault ("ns3::TcpL4Protocol::SocketType", StringValue ("ns3::TcpBbr"));
+  Config::SetDefault ("ns3::TcpSocket::SegmentSize", UintegerValue (1460));  // MSS
+  Config::SetDefault ("ns3::TcpSocket::InitialCwnd", UintegerValue (10));    // Начальное окно перегрузки
+
+  // ==========================================================================
+  // НАСТРОЙКА СИСТЕМЫ МОНИТОРИНГА ДЛЯ СБОРА СТАТИСТИКИ
+  // ==========================================================================
+  NS_LOG_INFO ("Настройка мониторинга...");
+  
+  FlowMonitorHelper flowMonitor;
+  Ptr<FlowMonitor> monitor = flowMonitor.InstallAll ();  // Мониторинг на всех узлах
+
+  // ==========================================================================
+  // ЗАПУСК СИМУЛЯЦИИ
+  // ==========================================================================
+  NS_LOG_INFO ("Запуск симуляции...");
+  Simulator::Stop (simulationTime);  // Установка времени остановки симуляции
+  Simulator::Run ();                 // Запуск основного цикла симуляции
+
+  // ==========================================================================
+  // АНАЛИЗ РЕЗУЛЬТАТОВ СИМУЛЯЦИИ
+  // ==========================================================================
+  NS_LOG_INFO ("Анализ результатов...");
+  
+  // Проверка на наличие потерянных пакетов
+  monitor->CheckForLostPackets ();
+  
+  // Получение классификатора для анализа потоков
+  Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier> (flowMonitor.GetClassifier ());
+  FlowMonitor::FlowStatsContainer stats = monitor->GetFlowStats ();
+  
+  // Итерация по всем зафиксированным потокам и вывод статистики
+  if (stats.empty()) {
+    NS_LOG_INFO("Нет зафиксированных потоков - пакеты не доходят до сервера");
+  } else {
+    for (auto iter = stats.begin (); iter != stats.end (); ++iter)
+    {
+      Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow (iter->first);
+      
+      NS_LOG_INFO ("Поток " << iter->first << " (" << t.sourceAddress << " -> " << t.destinationAddress << ")");
+      NS_LOG_INFO ("  Передано байт: " << iter->second.txBytes);
+      NS_LOG_INFO ("  Получено байт: " << iter->second.rxBytes);
+      
+      // Расчет пропускной способности (исключаем первую секунду - время установки соединения)
+      if (iter->second.rxBytes > 0) {
+        double throughput = iter->second.rxBytes * 8.0 / (simulationTime.GetSeconds () - 1) / 1e6;
+        NS_LOG_INFO ("  Пропускная способность: " << throughput << " Mbps");
+      }
+      
+      // Расчет средней задержки доставки пакетов
+      if (iter->second.rxPackets > 0) {
+        NS_LOG_INFO ("  Средняя задержка: " << iter->second.delaySum / iter->second.rxPackets);
+      }
+      
+      NS_LOG_INFO ("  Потеряно пакетов: " << iter->second.lostPackets);
     }
-    NS_LOG_INFO("Starting simulation for " << simulationTime << " seconds...");
-    
-    // Запуск симуляции
-    Simulator::Stop(Seconds(simulationTime));
-    Simulator::Run();
-    
-    // Сбор и вывод статистики
-    Ptr<PacketSink> sink = DynamicCast<PacketSink>(serverApps.Get(0));
-    std::cout << "=== SIMULATION RESULTS ===" << std::endl;
-    std::cout << "Total bytes received by server: " << sink->GetTotalRx() << std::endl;
-    if (sink->GetTotalRx() > 0) {
-        std::cout << "Average throughput: " << (sink->GetTotalRx() * 8.0) / (simulationTime - 1.0) / 1000.0 << " Kbps" << std::endl;
-    }
-    
-    Simulator::Destroy();
-    std::cout << "Simulation completed!" << std::endl;
+  }
 
-    return 0;
+  // ==========================================================================
+  // ЗАВЕРШЕНИЕ СИМУЛЯЦИИ
+  // ==========================================================================
+  Simulator::Destroy ();  // Очистка всех ресурсов симуляции
+  NS_LOG_INFO ("Симуляция завершена.");
+  
+  return 0;
 }

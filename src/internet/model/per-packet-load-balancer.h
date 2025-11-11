@@ -25,7 +25,8 @@ public:
                                      Socket::SocketErrno &sockerr) override;
 
 private:
-  Ptr<UniformRandomVariable> m_rand; // Генератор случайных чисел
+  uint32_t m_currentInterfaceIndex; // Текущий индекс для round robin балансировки
+  uint32_t m_totalRoutes;          // Общее количество маршрутов для балансировки
   
   // Вспомогательный метод для получения интерфейсов маршрутов
   std::vector<uint32_t> GetRouteInterfacesTo (Ipv4Address dest);
