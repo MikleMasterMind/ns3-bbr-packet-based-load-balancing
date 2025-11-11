@@ -48,6 +48,7 @@ set(source_files
     model/ipv4-routing-protocol.cc
     model/ipv4-routing-table-entry.cc
     model/ipv4-static-routing.cc
+    model/per-packet-load-balancer.cc
     model/ipv4.cc
     model/ipv6-address-generator.cc
     model/ipv6-autoconfigured-prefix.cc
@@ -177,6 +178,7 @@ set(header_files
     model/ipv4-routing-protocol.h
     model/ipv4-routing-table-entry.h
     model/ipv4-static-routing.h
+    model/per-packet-load-balancer.h
     model/ipv4.h
     model/ipv6-address-generator.h
     model/ipv6-end-point-demux.h
