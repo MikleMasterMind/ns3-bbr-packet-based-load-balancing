@@ -17,14 +17,19 @@ public:
   
   PerPacketLoadBalancer ();
   virtual ~PerPacketLoadBalancer ();
+  virtual std::string GetProtocolName (void) const;
 
-  // Переопределяем основной метод маршрутизации для исходящих пакетов
-  virtual Ptr<Ipv4Route> RouteOutput (Ptr<Packet> p, 
-                                     const Ipv4Header &header,
-                                     Ptr<NetDevice> oif,
-                                     Socket::SocketErrno &sockerr) override;
+  bool RouteInput(Ptr<const Packet> p,
+                    const Ipv4Header& header,
+                    Ptr<const NetDevice> idev,
+                    const UnicastForwardCallback& ucb,
+                    const MulticastForwardCallback& mcb,
+                    const LocalDeliverCallback& lcb,
+                    const ErrorCallback& ecb) override;
 
-private:
+
+  void PrintRoutingTable (Ptr<OutputStreamWrapper> stream, Time::Unit unit) const;                
+
   uint32_t m_currentInterfaceIndex; // Текущий индекс для round robin балансировки
   uint32_t m_totalRoutes;          // Общее количество маршрутов для балансировки
   
@@ -33,8 +38,8 @@ private:
   
   // Вспомогательный метод для получения шлюза для интерфейса
   Ipv4Address GetGatewayForInterface (uint32_t interface, Ipv4Address dest);
-};
 
+};
 } // namespace ns3
 
 #endif /* PER_PACKET_LOAD_BALANCER_H */

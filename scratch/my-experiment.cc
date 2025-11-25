@@ -5,15 +5,30 @@
 #include "ns3/applications-module.h"
 #include "ns3/flow-monitor-module.h"
 #include "ns3/per-packet-load-balancer.h"
+#include "ns3/ping-helper.h"
 
 using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE ("PerPacketLoadBalancerExperiment");
 
+
 int main (int argc, char *argv[])
 {
+
+  Ptr<OutputStreamWrapper> routingStream = Create<OutputStreamWrapper> (&std::cout);
   // Включаем подробное логирование для отладки
   LogComponentEnable ("PerPacketLoadBalancerExperiment", LOG_LEVEL_ALL);
+
+  LogComponentEnable ("PerPacketLoadBalancer", LOG_LEVEL_INFO);      // Все сообщения
+  // LogComponentEnable ("PerPacketLoadBalancer", LOG_LEVEL_DEBUG);  // Только отладка
+  // LogComponentEnable ("PerPacketLoadBalancer", LOG_LEVEL_INFO);   // Только информация
+  // LogComponentEnable ("PerPacketLoadBalancer", LOG_LEVEL_WARN);   // Только предупреждения
+  
+  // Дополнительные компоненты для полной диагностики
+  //LogComponentEnable ("Ipv4StaticRouting", LOG_LEVEL_DEBUG);
+//   LogComponentEnable ("Ipv4L3Protocol", LOG_LEVEL_INFO);
+//   LogComponentEnable ("TcpSocketBase", LOG_LEVEL_INFO);
+
 
   // ==========================================================================
   // НАСТРОЙКА ПАРАМЕТРОВ ЭКСПЕРИМЕНТА
@@ -107,8 +122,30 @@ int main (int argc, char *argv[])
   // ВКЛЮЧЕНИЕ ТРАССИРОВКИ ПАКЕТОВ
   // ==========================================================================
   NS_LOG_INFO ("Включение трассировки пакетов...");
-  p2p.EnableAsciiAll ("per-packet-balancer");
-  p2p.EnablePcapAll ("per-packet-balancer");
+  // Клиент -> Балансировщик
+	p2p.EnablePcap("result/client-balancer", clientToBalancerDevice.Get(0)); // клиент
+	p2p.EnablePcap("result/balancer-client", clientToBalancerDevice.Get(1)); // балансировщик
+
+	// Балансировщик -> Маршрутизаторы
+	for (uint32_t i = 0; i < numPaths; i++) {
+			// Балансировщик (интерфейс i+2) -> Маршрутизатор i
+			p2p.EnablePcap("result/balancer-router-" + std::to_string(i+2) + "-1", 
+										balancerToRouterDevices[i].Get(0)); // балансировщик
+			
+			p2p.EnablePcap("result/balancer-router-" + std::to_string(i+2) + "-2", 
+										balancerToRouterDevices[i].Get(1)); // маршрутизатор i
+	}
+
+	// Маршрутизаторы -> Сервер
+	for (uint32_t i = 0; i < numPaths; i++) {
+			// Маршрутизатор i -> Сервер (интерфейс i+1)
+			p2p.EnablePcap("result/router-server-1-" + std::to_string(i+1), 
+										routerToServerDevices[i].Get(0)); // маршрутизатор i
+			
+			p2p.EnablePcap("result/router-server-2-" + std::to_string(i+1), 
+										routerToServerDevices[i].Get(1)); // сервер
+	}
+
 
   // ==========================================================================
   // НАСТРОЙКА IP-АДРЕСАЦИИ
@@ -121,13 +158,13 @@ int main (int argc, char *argv[])
   Ipv4InterfaceContainer clientToBalancerInterface = ipv4.Assign (clientToBalancerDevice);
 
   // Назначение адресов для соединений Балансировщик-Маршрутизаторы
-  // Каждое соединение получает свою маленькую подсеть /30
+  // Каждое соединение получает свою маленькую подсеть /24
   std::vector<Ipv4InterfaceContainer> balancerToRouterInterfaces;
   for (uint32_t i = 0; i < numPaths; i++)
   {
     std::ostringstream network;
-    network << "10.1.2." << i * 4;  // 10.1.2.0, 10.1.2.4, 10.1.2.8, ...
-    ipv4.SetBase (network.str ().c_str (), "255.255.255.252");  // /30 подсеть (2 usable адреса)
+    network << "10.1." << i + 2 << ".0";  // 10.1.2.0, 10.1.3.0, 10.1.4.0, ...
+    ipv4.SetBase (network.str ().c_str (), "255.255.255.0");  // /24 подсеть
     Ipv4InterfaceContainer interfaces = ipv4.Assign (balancerToRouterDevices[i]);
     balancerToRouterInterfaces.push_back (interfaces);
   }
@@ -137,8 +174,8 @@ int main (int argc, char *argv[])
   for (uint32_t i = 0; i < numPaths; i++)
   {
     std::ostringstream network;
-    network << "10.1.3." << i * 4;  // 10.1.3.0, 10.1.3.4, 10.1.3.8, ...
-    ipv4.SetBase (network.str ().c_str (), "255.255.255.252");
+    network << "10.1." << i + 6 << ".0";  // 10.1.6.0, 10.1.7.0, 10.1.8.0, ...
+    ipv4.SetBase (network.str ().c_str (), "255.255.255.0");
     Ipv4InterfaceContainer interfaces = ipv4.Assign (routerToServerDevices[i]);
     routerToServerInterfaces.push_back (interfaces);
   }
@@ -148,13 +185,14 @@ int main (int argc, char *argv[])
   // ==========================================================================
   NS_LOG_INFO ("Назначение адреса серверу...");
   Ipv4InterfaceContainer serverInterfaces;
-  ipv4.SetBase ("10.1.4.0", "255.255.255.0");
+  ipv4.SetBase ("10.1.10.0", "255.255.255.0");
   
-  // Сервер получает статический адрес 10.1.4.1 на всех интерфейсах
+  // Сервер получает статический адрес 10.1.10.1 на всех интерфейсах
   Ptr<Ipv4> serverIpv4 = serverNode.Get(0)->GetObject<Ipv4>();
+
   for (uint32_t i = 0; i < numPaths; i++) {
     uint32_t interfaceIndex = serverIpv4->GetInterfaceForDevice(routerToServerDevices[i].Get(1));
-    Ipv4InterfaceAddress serverAddress = Ipv4InterfaceAddress(Ipv4Address("10.1.4.1"), Ipv4Mask("255.255.255.0"));
+    Ipv4InterfaceAddress serverAddress = Ipv4InterfaceAddress(Ipv4Address("10.1.10.1"), Ipv4Mask("255.255.255.0"));
     serverIpv4->AddAddress(interfaceIndex, serverAddress);
     serverIpv4->SetMetric(interfaceIndex, 1);
     serverIpv4->SetUp(interfaceIndex);
@@ -170,7 +208,11 @@ int main (int argc, char *argv[])
   Ptr<Ipv4> balancerIpv4 = balancerNode.Get (0)->GetObject<Ipv4> ();
   
   // Установка балансировщика как основного протокола маршрутизации
-  balancerIpv4->SetRoutingProtocol (loadBalancer);
+  balancerIpv4->SetAttribute("IpForward", BooleanValue(true));
+  
+  // Используйте ТОЛЬКО балансировщик - без списка!
+  balancerIpv4->SetRoutingProtocol(loadBalancer);
+
 
   // Добавление multiple маршрутов к одной и той же сети назначения
   // Это ключевой момент: несколько путей к одной сети через разные интерфейсы
@@ -179,15 +221,20 @@ int main (int argc, char *argv[])
     // Шлюзом является адрес маршрутизатора на другом конце соединения
     Ipv4Address gateway = balancerToRouterInterfaces[i].GetAddress (1);
     
-    // Добавление маршрута к сети 10.1.4.0/24 через i-й интерфейс
-    // Интерфейс i+1 потому что интерфейс 0 занят соединением с клиентом
-    loadBalancer->AddNetworkRouteTo (Ipv4Address ("10.1.4.0"), 
+    // Добавление маршрута к сети 10.1.10.0/24 через i-й интерфейс
+    // Интерфейс i+2 потому что интерфейс 1 занят соединением с клиентом
+    loadBalancer->AddNetworkRouteTo (Ipv4Address ("10.1.10.0"), 
                                     Ipv4Mask ("255.255.255.0"), 
                                     gateway, 
-                                    i + 1);
+                                    i + 2);
     
-    NS_LOG_INFO("Добавлен маршрут через интерфейс " << i+1 << " шлюз " << gateway);
+    NS_LOG_INFO("Добавлен маршрут через интерфейс " << i+2 << " шлюз " << gateway);
   }
+
+	// ДИАГНОСТИКА: проверяем доступность маршрутов
+	NS_LOG_INFO("Проверка доступности маршрутов к 10.1.10.1:");
+	std::vector<uint32_t> interfaces = loadBalancer->GetRouteInterfacesTo(Ipv4Address("10.1.10.1"));
+	NS_LOG_INFO("Найдено интерфейсов для 10.1.10.1: " << interfaces.size());
 
   // ==========================================================================
   // НАСТРОЙКА СТАТИЧЕСКОЙ МАРШРУТИЗАЦИИ НА МАРШРУТИЗАТОРАХ
@@ -200,10 +247,10 @@ int main (int argc, char *argv[])
     
     // Получение индекса интерфейса, подключенного к серверу
     uint32_t serverInterfaceIndex = routerNodes.Get(i)->GetObject<Ipv4>()->GetInterfaceForDevice(
-        routerToServerDevices[i].Get(1));
+        routerToServerDevices[i].Get(0));
     
     // Маршрут от маршрутизатора к серверу - прямое соединение
-    routerRouting->AddHostRouteTo(Ipv4Address("10.1.4.1"), 
+    routerRouting->AddHostRouteTo(Ipv4Address("10.1.10.1"), 
                                  routerToServerInterfaces[i].GetAddress(1),
                                  serverInterfaceIndex);
     
@@ -215,7 +262,10 @@ int main (int argc, char *argv[])
     routerRouting->AddHostRouteTo(Ipv4Address("10.1.1.1"),
                                  balancerToRouterInterfaces[i].GetAddress(0),
                                  balancerInterfaceIndex);
-  }
+
+    // NS_LOG_INFO ("Таблица маршрутизации роутера:" << i);
+    // routerRouting->PrintRoutingTable (routingStream, Time::S);
+    }
 
   // ==========================================================================
   // НАСТРОЙКА СТАТИЧЕСКОЙ МАРШРУТИЗАЦИИ НА СЕРВЕРЕ
@@ -232,6 +282,21 @@ int main (int argc, char *argv[])
                                  interfaceIndex);
   }
 
+	// ==========================================================================
+	// НАСТРОЙКА МАРШРУТИЗАЦИИ НА КЛИЕНТЕ
+	// ==========================================================================
+	NS_LOG_INFO ("Настройка маршрутизации на клиенте...");
+
+	// Получаем протокол маршрутизации клиента
+	Ptr<Ipv4> clientIpv4 = clientNode.Get(0)->GetObject<Ipv4>();
+	Ptr<Ipv4StaticRouting> clientRouting = Ipv4RoutingHelper::GetRouting <Ipv4StaticRouting> (
+			clientIpv4->GetRoutingProtocol());
+
+	// Добавляем маршрут по умолчанию через балансировщик
+	clientRouting->AddHostRouteTo(Ipv4Address("10.1.10.1"),
+                             clientToBalancerInterface.GetAddress(1), 1);
+	NS_LOG_INFO("Добавлен маршрут по умолчанию через " << clientToBalancerInterface.GetAddress(1));
+
   // ==========================================================================
   // НАСТРОЙКА ПРИЛОЖЕНИЙ ДЛЯ ГЕНЕРАЦИИ ТРАФИКА
   // ==========================================================================
@@ -240,7 +305,7 @@ int main (int argc, char *argv[])
   // TCP-сервер (приемник данных) на узле-сервере
   uint16_t serverPort = 5000;
   // Сервер "живет" по адресу 10.1.4.1 - это виртуальный адрес, к которому обращается клиент
-  Address serverAddress (InetSocketAddress (Ipv4Address ("10.1.4.1"), serverPort));
+  Address serverAddress (InetSocketAddress (Ipv4Address ("10.1.10.1"), serverPort));
   
   // Создание TCP-сервера, который будет принимать входящие соединения
   PacketSinkHelper packetSinkHelper ("ns3::TcpSocketFactory", serverAddress);
@@ -258,15 +323,94 @@ int main (int argc, char *argv[])
   clientApp.Stop (simulationTime - Seconds (1));  // Заканчивает за 1 секунду до конца
 
   // ==========================================================================
-  // НАСТРОЙКА TCP BBR - АЛГОРИТМА УПРАВЛЕНИЯ ПЕРЕГРУЗКОЙ
+  // НАСТРОЙКА TCP CUBIC
   // ==========================================================================
-  NS_LOG_INFO ("Настройка TCP BBR...");
+  NS_LOG_INFO ("Настройка TCP Cubic...");
+  Config::SetDefault ("ns3::TcpL4Protocol::SocketType", StringValue ("ns3::TcpCubic"));
+  Config::SetDefault ("ns3::TcpSocketBase::Sack", BooleanValue (false));
+  Config::SetDefault ("ns3::TcpSocket::SegmentSize", UintegerValue (1440));
+  Config::SetDefault ("ns3::TcpSocket::InitialCwnd", UintegerValue (10));
+
+  // ==========================================================================
+  // ВЫВОД ТАБЛИЦ МАРШРУТИЗАЦИИ ДЛЯ ДЕБАГА
+  // ==========================================================================
+
+
+  // ДИАГНОСТИКА МАРШРУТИЗАЦИИ
+	NS_LOG_INFO("=== ДИАГНОСТИКА МАРШРУТИЗАЦИИ ===");
+
+
+	// Безопасная проверка маршрутизации
+	NS_LOG_INFO("Маршруты клиента:");
+	clientIpv4 = clientNode.Get(0)->GetObject<Ipv4>();
+	if (clientIpv4) {
+			Ptr<Ipv4RoutingProtocol> clientRouting = clientIpv4->GetRoutingProtocol();
+			if (clientRouting) {
+					clientRouting->PrintRoutingTable(routingStream, Time::S);
+			} else {
+					NS_LOG_ERROR("На клиенте нет протокола маршрутизации");
+			}
+	}
+
+  NS_LOG_INFO ("Таблица маршрутизации балансировщика:");
+  loadBalancer->PrintRoutingTable (routingStream, Time::S);
+
+	NS_LOG_INFO("Маршруты сервера:");
+	serverIpv4 = serverNode.Get(0)->GetObject<Ipv4>();
+	if (serverIpv4) {
+			Ptr<Ipv4RoutingProtocol> serverRouting = serverIpv4->GetRoutingProtocol();
+			if (serverRouting) {
+					serverRouting->PrintRoutingTable(routingStream, Time::S);
+			} else {
+					NS_LOG_ERROR("На сервере нет протокола маршрутизации");
+			}
+	}
+
+	// Проверяем маршрутизаторы
+	for (uint32_t i = 0; i < numPaths; i++) {
+			NS_LOG_INFO("Маршруты маршрутизатора " << i << ":");
+			Ptr<Ipv4> routerIpv4 = routerNodes.Get(i)->GetObject<Ipv4>();
+			if (routerIpv4) {
+					Ptr<Ipv4RoutingProtocol> routerRouting = routerIpv4->GetRoutingProtocol();
+					if (routerRouting) {
+							routerRouting->PrintRoutingTable(routingStream, Time::S);
+					} else {
+							NS_LOG_ERROR("На маршрутизаторе " << i << " нет протокола маршрутизации");
+					}
+			}
+	}
+
+	// ==========================================================================
+	// ПРОВЕРКА МАРШРУТИЗАЦИИ ПЕРЕД ЗАПУСКОМ
+	// ==========================================================================
+	NS_LOG_INFO("=== FINAL ROUTING CHECK ===");
+
+	// Проверяем, что балансировщик видит multiple маршруты
+	std::vector<uint32_t> finalInterfaces = loadBalancer->GetRouteInterfacesTo(Ipv4Address("10.1.10.1"));
+	NS_LOG_INFO("Final route check - interfaces to 10.1.10.1: " << finalInterfaces.size());
+	for (uint32_t i = 0; i < finalInterfaces.size(); i++) {
+			NS_LOG_INFO("  Interface " << finalInterfaces[i] << 
+									" -> Gateway: " << loadBalancer->GetGatewayForInterface(finalInterfaces[i], Ipv4Address("10.1.10.1")));
+	}
+
+	// Проверяем, что клиент может достичь сервера
+	clientIpv4 = clientNode.Get(0)->GetObject<Ipv4>();
+	Ptr<Ipv4Route> testRoute;
+	Socket::SocketErrno sockerr;
+	Ipv4Header testHeader;
+	testHeader.SetDestination(Ipv4Address("10.1.10.1"));
+	testHeader.SetSource(Ipv4Address("10.1.1.1"));
+
+	testRoute = clientIpv4->GetRoutingProtocol()->RouteOutput(
+			Create<Packet>(), testHeader, nullptr, sockerr);
+
+	if (testRoute) {
+			NS_LOG_INFO("Client can route to server: " << testRoute->GetGateway() << 
+									" via interface " << testRoute->GetOutputDevice()->GetIfIndex());
+	} else {
+			NS_LOG_ERROR("Client cannot route to server!");
+	}
   
-  // Установка BBR (Bottleneck Bandwidth and Round-trip propagation time) как алгоритма перегрузки
-  // BBR особенно чувствителен к вариациям RTT, что делает его идеальным для демонстрации проблемы
-  Config::SetDefault ("ns3::TcpL4Protocol::SocketType", StringValue ("ns3::TcpBbr"));
-  Config::SetDefault ("ns3::TcpSocket::SegmentSize", UintegerValue (1460));  // MSS
-  Config::SetDefault ("ns3::TcpSocket::InitialCwnd", UintegerValue (10));    // Начальное окно перегрузки
 
   // ==========================================================================
   // НАСТРОЙКА СИСТЕМЫ МОНИТОРИНГА ДЛЯ СБОРА СТАТИСТИКИ

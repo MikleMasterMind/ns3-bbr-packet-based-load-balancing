@@ -404,7 +404,7 @@ class Ipv4StaticRouting : public Ipv4RoutingProtocol
      * @brief the forwarding table for multicast.
      */
     MulticastRoutes m_multicastRoutes;
-
+    protected:
     /**
      * @brief Ipv4 reference.
      */

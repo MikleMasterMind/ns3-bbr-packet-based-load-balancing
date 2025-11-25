@@ -31,8 +31,15 @@ PerPacketLoadBalancer::GetTypeId (void)
 PerPacketLoadBalancer::PerPacketLoadBalancer ()
 {
   NS_LOG_FUNCTION (this);
+  NS_LOG_INFO("=== PER PACKET LOAD BALANCER CONSTRUCTOR ===");
   m_currentInterfaceIndex = 0; // Начинаем с первого интерфейса
   m_totalRoutes = 0;
+}
+
+std::string
+PerPacketLoadBalancer::GetProtocolName (void) const
+{
+  return "PerPacketLoadBalancer";
 }
 
 PerPacketLoadBalancer::~PerPacketLoadBalancer ()
@@ -53,16 +60,22 @@ PerPacketLoadBalancer::GetRouteInterfacesTo (Ipv4Address dest)
     Ipv4RoutingTableEntry route = GetRoute(i);
     
     // Проверяем, подходит ли маршрут для destination адреса
-    // Сравниваем либо точное совпадение адреса, либо совпадение по сети
-    if (route.GetDest () == dest || 
-        route.GetDest ().CombineMask (route.GetDestNetworkMask ()) == 
-          dest.CombineMask (route.GetDestNetworkMask ()))
+    // Для host routes: точное совпадение адреса
+    if (route.GetDest () == dest) 
     {
       interfaces.push_back (route.GetInterface ());
-      NS_LOG_DEBUG ("Found route to " << dest << " via interface " << route.GetInterface ());
+      NS_LOG_DEBUG ("Found host route to " << dest << " via interface " << route.GetInterface ());
+    }
+    // Для network routes: совпадение по сети
+    else if (route.GetDest ().CombineMask (route.GetDestNetworkMask ()) == 
+             dest.CombineMask (route.GetDestNetworkMask ()))
+    {
+      interfaces.push_back (route.GetInterface ());
+      NS_LOG_DEBUG ("Found network route to " << dest << " via interface " << route.GetInterface ());
     }
   }
   
+  NS_LOG_DEBUG("Total interfaces found for " << dest << ": " << interfaces.size());
   return interfaces;
 }
 
@@ -84,78 +97,151 @@ PerPacketLoadBalancer::GetGatewayForInterface (uint32_t interface, Ipv4Address d
     }
   }
   
+
+  // std::cout << "UNLUCK" << std::endl;
   return Ipv4Address::GetZero ();
 }
 
-Ptr<Ipv4Route>
-PerPacketLoadBalancer::RouteOutput (Ptr<Packet> p, 
-                                   const Ipv4Header &header,
-                                   Ptr<NetDevice> oif,
-                                   Socket::SocketErrno &sockerr)
+bool
+PerPacketLoadBalancer::RouteInput (Ptr<const Packet> p, 
+                                  const Ipv4Header& header,
+                                  Ptr<const NetDevice> idev,
+                                  const UnicastForwardCallback& ucb,
+                                  const MulticastForwardCallback& mcb,
+                                  const LocalDeliverCallback& lcb,
+                                  const ErrorCallback& ecb)
 {
-  NS_LOG_FUNCTION (this << p << header << oif);
-  
-  Ipv4Address destAddress = header.GetDestination ();
-  
-  // Получаем все доступные интерфейсы для destination адреса
-  std::vector<uint32_t> interfaces = GetRouteInterfacesTo (destAddress);
-  
-  // Если нет доступных маршрутов, используем стандартную маршрутизацию
-  if (interfaces.empty ())
-  {
-    NS_LOG_WARN ("No routes found for destination: " << destAddress);
-    return Ipv4StaticRouting::RouteOutput (p, header, oif, sockerr);
-  }
-  
-  // Обновляем общее количество маршрутов при первом вызове
-  if (m_totalRoutes == 0) {
-    m_totalRoutes = interfaces.size();
-  }
-  
-  // Round Robin алгоритм: выбираем следующий интерфейс по кругу
-  uint32_t selectedInterface = interfaces[m_currentInterfaceIndex];
-  
-  // Увеличиваем индекс для следующего пакета, зацикливая при достижении конца
-  m_currentInterfaceIndex = (m_currentInterfaceIndex + 1) % m_totalRoutes;
-  
-  NS_LOG_DEBUG ("Round Robin: selected interface " << selectedInterface 
-                << " (index " << m_currentInterfaceIndex << " of " << m_totalRoutes << ")");
-  
-  // Создаем объект маршрута
-  Ptr<Ipv4Route> rtentry = Create<Ipv4Route> ();
-  
-  // Получаем Ipv4 объект для доступа к сетевым интерфейсам
-  Ptr<Ipv4> ipv4 = GetObject<Ipv4> ();
+  NS_LOG_FUNCTION (this << p << header << idev);
+  NS_LOG_INFO("=== PER PACKET BALANCER RouteInput CALLED ===");
+  NS_LOG_INFO("Packet from " << header.GetSource() << " to " << header.GetDestination());
+  NS_LOG_INFO("Input device: " << (idev ? idev->GetIfIndex() : -1));\
+
+  // Получаем Ipv4 объект - ДОЛЖНО БЫТЬ ПЕРВЫМ ДЕЛОМ
+  Ptr<Ipv4> ipv4 = m_ipv4;
   if (!ipv4)
   {
-    NS_LOG_ERROR ("No Ipv4 object found");
-    sockerr = Socket::ERROR_NOROUTETOHOST;
-    return 0;
+    NS_LOG_ERROR("No Ipv4 object found in RouteInput - falling back to static routing");
+    // Если нет Ipv4 объекта, используем стандартную маршрутизацию
+    return Ipv4StaticRouting::RouteInput(p, header, idev, ucb, mcb, lcb, ecb);
   }
-  
-  // Устанавливаем source адрес из выбранного интерфейса
-  uint32_t numAddresses = ipv4->GetNAddresses (selectedInterface);
-  if (numAddresses > 0)
+
+  // Проверяем, не является ли пакет предназначенным локально
+  if (header.GetDestination().IsLocalhost())
   {
-    Ipv4InterfaceAddress ifAddr = ipv4->GetAddress (selectedInterface, 0);
-    rtentry->SetSource (ifAddr.GetLocal ());
+    NS_LOG_DEBUG("Localhost destination, delivering locally");
+    lcb(p, header, header.GetProtocol());
+    return true;
   }
+
+  // Проверяем, не является ли пакет широковещательным или многоадресным
+  if (header.GetDestination().IsBroadcast() || header.GetDestination().IsMulticast())
+  {
+    NS_LOG_DEBUG("Broadcast/multicast packet, using standard routing");
+    return Ipv4StaticRouting::RouteInput(p, header, idev, ucb, mcb, lcb, ecb);
+  }
+
+  // Проверяем все интерфейсы на предмет локального адреса назначения
+  for (uint32_t i = 0; i < ipv4->GetNInterfaces(); i++)
+  {
+    for (uint32_t j = 0; j < ipv4->GetNAddresses(i); j++)
+    {
+      Ipv4InterfaceAddress addr = ipv4->GetAddress(i, j);
+      if (addr.GetLocal() == header.GetDestination())
+      {
+        NS_LOG_DEBUG("Local delivery for " << header.GetDestination());
+        lcb(p, header, header.GetProtocol());
+        return true;
+      }
+    }
+  }
+
+  // Пакет нужно форвардить - применяем балансировку
+  NS_LOG_DEBUG("Packet needs forwarding, applying load balancing");
+
+  Ipv4Address destAddress = header.GetDestination();
+
+  // Получаем все доступные интерфейсы для destination адреса
+  std::vector<uint32_t> interfaces = GetRouteInterfacesTo(destAddress);
   
-  // Получаем шлюз для выбранного интерфейса
-  Ipv4Address gateway = GetGatewayForInterface (selectedInterface, destAddress);
-  rtentry->SetGateway (gateway);
+  NS_LOG_DEBUG("Found " << interfaces.size() << " interfaces for " << destAddress);
   
-  // Устанавливаем destination адрес и выходное устройство
-  rtentry->SetDestination (destAddress);
-  rtentry->SetOutputDevice (ipv4->GetNetDevice (selectedInterface));
-  
-  NS_LOG_DEBUG ("Selected route via interface " << selectedInterface 
-                 << " for packet to " << destAddress
-                 << " via gateway " << gateway
-                 << " (Round Robin index: " << m_currentInterfaceIndex << ")");
-  
-  sockerr = Socket::ERROR_NOTERROR;
-  return rtentry;
+  // Если есть multiple маршруты, используем балансировку
+  if (interfaces.size() > 1)
+  {
+    NS_LOG_INFO("=== BALANCER ACTIVE in RouteInput for " << destAddress << " ===");
+    NS_LOG_INFO("Available interfaces: " << interfaces.size());
+    
+    // Обновляем общее количество маршрутов если нужно
+    if (m_totalRoutes == 0 || m_totalRoutes != interfaces.size()) {
+      m_totalRoutes = interfaces.size();
+      NS_LOG_DEBUG("Updated total routes to: " << m_totalRoutes);
+    }
+    
+    // Round Robin алгоритм
+    uint32_t selectedInterface = interfaces[m_currentInterfaceIndex];
+    
+    // Увеличиваем индекс для следующего пакета
+    m_currentInterfaceIndex = (m_currentInterfaceIndex + 1) % m_totalRoutes;
+    
+    NS_LOG_DEBUG("Round Robin: selected interface " << selectedInterface 
+                  << " (index " << (m_currentInterfaceIndex == 0 ? m_totalRoutes - 1 : m_currentInterfaceIndex - 1) 
+                  << " of " << m_totalRoutes << ")");
+    
+    // Создаем объект маршрута
+    Ptr<Ipv4Route> rtentry = Create<Ipv4Route>();
+    
+    // Устанавливаем source адрес из выбранного интерфейса
+    uint32_t numAddresses = ipv4->GetNAddresses(selectedInterface);
+    if (numAddresses > 0)
+    {
+      Ipv4InterfaceAddress ifAddr = ipv4->GetAddress(selectedInterface, 0);
+      rtentry->SetSource(ifAddr.GetLocal());
+      NS_LOG_DEBUG("Set source address: " << ifAddr.GetLocal());
+    }
+    else
+    {
+      NS_LOG_WARN("No IP addresses configured on interface " << selectedInterface);
+      ecb(p, header, Socket::ERROR_NOROUTETOHOST);
+      return false;
+    }
+    
+    // Получаем шлюз для выбранного интерфейса
+    Ipv4Address gateway = GetGatewayForInterface(selectedInterface, destAddress);
+    rtentry->SetGateway(gateway);
+    
+    // Устанавливаем destination адрес и выходное устройство
+    rtentry->SetDestination(destAddress);
+    Ptr<NetDevice> outputDevice = ipv4->GetNetDevice(selectedInterface);
+    if (!outputDevice)
+    {
+      NS_LOG_ERROR("No net device found for interface " << selectedInterface);
+      ecb(p, header, Socket::ERROR_NOROUTETOHOST);
+      return false;
+    }
+    rtentry->SetOutputDevice(outputDevice);
+    
+    NS_LOG_INFO("Selected forward route via interface " << selectedInterface 
+                 << " for packet from " << header.GetSource() << " to " << destAddress
+                 << " via gateway " << gateway);
+    
+    // Вызываем callback для форвардинга пакета
+    ucb(rtentry, p, header);
+    return true;
+  }
+  else 
+  {
+    return Ipv4StaticRouting::RouteInput(p, header, idev, ucb, mcb, lcb, ecb);
+  }
 }
 
-} // namespace ns3
+
+void
+PerPacketLoadBalancer::PrintRoutingTable (Ptr<OutputStreamWrapper> stream, Time::Unit unit) const
+{
+  NS_LOG_FUNCTION (this << stream);
+  
+  // Сначала вызываем стандартный вывод таблицы маршрутизации
+  Ipv4StaticRouting::PrintRoutingTable (stream, unit);
+}
+
+}
