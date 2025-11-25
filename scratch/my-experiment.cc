@@ -6,10 +6,41 @@
 #include "ns3/flow-monitor-module.h"
 #include "ns3/per-packet-load-balancer.h"
 #include "ns3/ping-helper.h"
+#include <fstream>
 
 using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE ("PerPacketLoadBalancerExperiment");
+
+// Глобальные переменные для мониторинга CWND
+bool firstCwnd = true;
+Ptr<OutputStreamWrapper> cWndStream;
+uint32_t cWndValue;
+
+// Функция трассировки CWND
+static void
+CwndTracer (uint32_t oldval, uint32_t newval)
+{
+  if (firstCwnd)
+    {
+      *cWndStream->GetStream () << "0.0 " << oldval << std::endl;
+      firstCwnd = false;
+    }
+  *cWndStream->GetStream () << Simulator::Now ().GetSeconds () << " " << newval << std::endl;
+  cWndValue = newval;
+  NS_LOG_DEBUG("CWND: " << newval << " at time " << Simulator::Now ().GetSeconds ());
+}
+
+// Функция для подключения трассировки CWND
+static void
+TraceCwnd (std::string cwnd_tr_file_name)
+{
+  AsciiTraceHelper ascii;
+  cWndStream = ascii.CreateFileStream (cwnd_tr_file_name.c_str ());
+  // Подключаемся к сокету на клиенте (левый узел)
+  Config::ConnectWithoutContext ("/NodeList/0/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow", MakeCallback (&CwndTracer));
+}
+
 
 
 int main (int argc, char *argv[])
@@ -323,6 +354,22 @@ int main (int argc, char *argv[])
   clientApp.Stop (simulationTime - Seconds (1));  // Заканчивает за 1 секунду до конца
 
   // ==========================================================================
+  // МОНИТОРИНГ CWND - ДОБАВЬ СЮДА
+  // ==========================================================================
+  NS_LOG_INFO ("Настройка мониторинга CWND...");
+
+  /// ДОБАВЬ ЭТО ДЛЯ МОНИТОРИНГА CWND:
+  std::string dir = "results/data/";
+  std::string dirToSave = "mkdir -p " + dir;
+  system (dirToSave.c_str ());
+  
+  // Мониторинг CWND для первого клиента
+  Simulator::Schedule (Seconds (1 + 0.000001), &TraceCwnd, dir + "cwnd.data");
+  
+  NS_LOG_INFO("Мониторинг CWND активирован");
+
+
+  // ==========================================================================
   // НАСТРОЙКА TCP CUBIC
   // ==========================================================================
   NS_LOG_INFO ("Настройка TCP Cubic...");
@@ -465,6 +512,12 @@ int main (int argc, char *argv[])
       NS_LOG_INFO ("  Потеряно пакетов: " << iter->second.lostPackets);
     }
   }
+
+
+  NS_LOG_INFO("Данные сохранены в папке result/:");
+  NS_LOG_INFO("  - cwnd_data.txt: окно перегрузки");
+  NS_LOG_INFO("  - rtt_data.txt: время RTT");
+  NS_LOG_INFO("  - throughput_data.txt: пропускная способность");
 
   // ==========================================================================
   // ЗАВЕРШЕНИЕ СИМУЛЯЦИИ
