@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # Чтение данных
-cwnd_data = np.loadtxt('results/data/cwnd.data', skiprows=1)
+cwnd_data = np.loadtxt('result/data/cwnd.data', skiprows=1)
 
 # Создание графиков
 fig, ((ax1, ax4)) = plt.subplots(2, figsize=(12, 8))
@@ -23,5 +23,5 @@ ax4.set_title('Распределение размера окна')
 ax4.grid(True)
 
 plt.tight_layout()
-plt.savefig('results/graph/tcp_cubic_analysis.png', dpi=300)
+plt.savefig('result/graph/tcp_cubic_analysis.png', dpi=300)
 plt.show()

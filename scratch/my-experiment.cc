@@ -49,11 +49,7 @@ int main (int argc, char *argv[])
   Ptr<OutputStreamWrapper> routingStream = Create<OutputStreamWrapper> (&std::cout);
   // Включаем подробное логирование для отладки
   LogComponentEnable ("PerPacketLoadBalancerExperiment", LOG_LEVEL_ALL);
-
   LogComponentEnable ("PerPacketLoadBalancer", LOG_LEVEL_INFO);      // Все сообщения
-  // LogComponentEnable ("PerPacketLoadBalancer", LOG_LEVEL_DEBUG);  // Только отладка
-  // LogComponentEnable ("PerPacketLoadBalancer", LOG_LEVEL_INFO);   // Только информация
-  // LogComponentEnable ("PerPacketLoadBalancer", LOG_LEVEL_WARN);   // Только предупреждения
   
   // Дополнительные компоненты для полной диагностики
   //LogComponentEnable ("Ipv4StaticRouting", LOG_LEVEL_DEBUG);
@@ -156,14 +152,20 @@ int main (int argc, char *argv[])
   // Клиент -> Балансировщик
 	p2p.EnablePcap("result/client-balancer", clientToBalancerDevice.Get(0)); // клиент
 	p2p.EnablePcap("result/balancer-client", clientToBalancerDevice.Get(1)); // балансировщик
+	p2p.EnableAscii("result/client-balancer", clientToBalancerDevice.Get(0)); // клиент
+	p2p.EnableAscii("result/balancer-client", clientToBalancerDevice.Get(1)); // балансировщик
 
 	// Балансировщик -> Маршрутизаторы
 	for (uint32_t i = 0; i < numPaths; i++) {
 			// Балансировщик (интерфейс i+2) -> Маршрутизатор i
 			p2p.EnablePcap("result/balancer-router-" + std::to_string(i+2) + "-1", 
 										balancerToRouterDevices[i].Get(0)); // балансировщик
+			p2p.EnableAscii("result/balancer-router-" + std::to_string(i+2) + "-1", 
+										balancerToRouterDevices[i].Get(0)); // балансировщик
 			
 			p2p.EnablePcap("result/balancer-router-" + std::to_string(i+2) + "-2", 
+										balancerToRouterDevices[i].Get(1)); // маршрутизатор i
+			p2p.EnableAscii("result/balancer-router-" + std::to_string(i+2) + "-2", 
 										balancerToRouterDevices[i].Get(1)); // маршрутизатор i
 	}
 
@@ -359,7 +361,7 @@ int main (int argc, char *argv[])
   NS_LOG_INFO ("Настройка мониторинга CWND...");
 
   /// ДОБАВЬ ЭТО ДЛЯ МОНИТОРИНГА CWND:
-  std::string dir = "results/data/";
+  std::string dir = "result/data/";
   std::string dirToSave = "mkdir -p " + dir;
   system (dirToSave.c_str ());
   
@@ -373,7 +375,7 @@ int main (int argc, char *argv[])
   // НАСТРОЙКА TCP CUBIC
   // ==========================================================================
   NS_LOG_INFO ("Настройка TCP Cubic...");
-  Config::SetDefault ("ns3::TcpL4Protocol::SocketType", StringValue ("ns3::TcpCubic"));
+  Config::SetDefault ("ns3::TcpL4Protocol::SocketType", StringValue ("ns3::TcpBbr"));
   Config::SetDefault ("ns3::TcpSocketBase::Sack", BooleanValue (false));
   Config::SetDefault ("ns3::TcpSocket::SegmentSize", UintegerValue (1440));
   Config::SetDefault ("ns3::TcpSocket::InitialCwnd", UintegerValue (10));
@@ -513,17 +515,7 @@ int main (int argc, char *argv[])
     }
   }
 
-
-  NS_LOG_INFO("Данные сохранены в папке result/:");
-  NS_LOG_INFO("  - cwnd_data.txt: окно перегрузки");
-  NS_LOG_INFO("  - rtt_data.txt: время RTT");
-  NS_LOG_INFO("  - throughput_data.txt: пропускная способность");
-
-  // ==========================================================================
-  // ЗАВЕРШЕНИЕ СИМУЛЯЦИИ
-  // ==========================================================================
   Simulator::Destroy ();  // Очистка всех ресурсов симуляции
-  NS_LOG_INFO ("Симуляция завершена.");
   
   return 0;
 }
