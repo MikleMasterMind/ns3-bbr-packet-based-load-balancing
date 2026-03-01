@@ -17,6 +17,11 @@ bool firstCwnd = true;
 Ptr<OutputStreamWrapper> cWndStream;
 uint32_t cWndValue;
 
+// Глобальные переменные для мониторинга RTT
+bool firstRtt = true;
+Ptr<OutputStreamWrapper> rttStream;
+Time rttValue;
+
 // Функция трассировки CWND
 static void
 CwndTracer (uint32_t oldval, uint32_t newval)
@@ -28,7 +33,7 @@ CwndTracer (uint32_t oldval, uint32_t newval)
     }
   *cWndStream->GetStream () << Simulator::Now ().GetSeconds () << " " << newval << std::endl;
   cWndValue = newval;
-  NS_LOG_DEBUG("CWND: " << newval << " at time " << Simulator::Now ().GetSeconds ());
+  // NS_LOG_INFO("CWND: " << newval << " at time " << Simulator::Now ().GetSeconds ());
 }
 
 // Функция для подключения трассировки CWND
@@ -37,8 +42,53 @@ TraceCwnd (std::string cwnd_tr_file_name)
 {
   AsciiTraceHelper ascii;
   cWndStream = ascii.CreateFileStream (cwnd_tr_file_name.c_str ());
-  // Подключаемся к сокету на клиенте (левый узел)
-  Config::ConnectWithoutContext ("/NodeList/0/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow", MakeCallback (&CwndTracer));
+  
+  // Записываем заголовок файла
+  *cWndStream->GetStream () << "#Time CWND" << std::endl;
+  
+  // Используем более надежный способ подключения через Config::Connect
+  // с отложенным выполнением, чтобы убедиться, что сокет создан
+  Config::ConnectWithoutContextFailSafe (
+    "/NodeList/0/ApplicationList/0/$ns3::BulkSendApplication/Socket/CongestionWindow",
+    MakeCallback (&CwndTracer));
+  
+  Config::ConnectWithoutContextFailSafe (
+    "/NodeList/0/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow",
+    MakeCallback (&CwndTracer));
+    
+  NS_LOG_INFO("Попытка подключения трассировки CWND выполнена");
+}
+
+// Функция трассировки RTT
+static void
+RttTracer (Time oldval, Time newval)
+{
+  if (firstRtt)
+    {
+      *rttStream->GetStream () << "0.0 " << oldval.GetSeconds () << std::endl;
+      firstRtt = false;
+    }
+  *rttStream->GetStream () << Simulator::Now ().GetSeconds () << " " << newval.GetSeconds () << std::endl;
+  rttValue = newval;
+  // NS_LOG_INFO("RTT: " << newval.GetSeconds () << "s at time " << Simulator::Now ().GetSeconds ());
+}
+
+// Функция для подключения трассировки RTT
+static void
+TraceRtt (std::string rtt_tr_file_name)
+{
+  AsciiTraceHelper ascii;
+  rttStream = ascii.CreateFileStream (rtt_tr_file_name.c_str ());
+  
+  // Записываем заголовок файла
+  *rttStream->GetStream () << "#Time RTT(s)" << std::endl;
+  
+  // Подключаемся к RTT трассировке TCP сокета
+  Config::ConnectWithoutContextFailSafe (
+    "/NodeList/0/$ns3::TcpL4Protocol/SocketList/0/RTT",
+    MakeCallback (&RttTracer));
+  
+  NS_LOG_INFO("Попытка подключения трассировки RTT выполнена");
 }
 
 
@@ -356,29 +406,33 @@ int main (int argc, char *argv[])
   clientApp.Stop (simulationTime - Seconds (1));  // Заканчивает за 1 секунду до конца
 
   // ==========================================================================
-  // МОНИТОРИНГ CWND - ДОБАВЬ СЮДА
+  // НАСТРОЙКА TCP CUBIC
+  // ==========================================================================
+  NS_LOG_INFO ("Настройка TCP Cubic...");
+  Config::SetDefault ("ns3::TcpL4Protocol::SocketType", StringValue ("ns3::TcpCubic"));
+  Config::SetDefault ("ns3::TcpSocketBase::Sack", BooleanValue (false));
+  Config::SetDefault ("ns3::TcpSocket::SegmentSize", UintegerValue (1440));
+  Config::SetDefault ("ns3::TcpSocket::InitialCwnd", UintegerValue (10));
+
+  // ==========================================================================
+  // МОНИТОРИНГ CWND
   // ==========================================================================
   NS_LOG_INFO ("Настройка мониторинга CWND...");
 
-  /// ДОБАВЬ ЭТО ДЛЯ МОНИТОРИНГА CWND:
   std::string dir = "result/data/";
   std::string dirToSave = "mkdir -p " + dir;
   system (dirToSave.c_str ());
   
-  // Мониторинг CWND для первого клиента
-  Simulator::Schedule (Seconds (1 + 0.000001), &TraceCwnd, dir + "cwnd.data");
+  // Мониторинг CWND для первого клиента - запускаем после установки соединения
+  // Используем более позднее время для запуска, чтобы убедиться, что соединение установлено
+  Simulator::Schedule (Seconds (1.5), &TraceCwnd, dir + "cwnd.data");
   
   NS_LOG_INFO("Мониторинг CWND активирован");
-
-
-  // ==========================================================================
-  // НАСТРОЙКА TCP CUBIC
-  // ==========================================================================
-  NS_LOG_INFO ("Настройка TCP Cubic...");
-  Config::SetDefault ("ns3::TcpL4Protocol::SocketType", StringValue ("ns3::TcpBbr"));
-  Config::SetDefault ("ns3::TcpSocketBase::Sack", BooleanValue (false));
-  Config::SetDefault ("ns3::TcpSocket::SegmentSize", UintegerValue (1440));
-  Config::SetDefault ("ns3::TcpSocket::InitialCwnd", UintegerValue (10));
+  
+  // Мониторинг RTT
+  Simulator::Schedule (Seconds (1.5), &TraceRtt, dir + "rtt.data");
+  
+  NS_LOG_INFO("Мониторинг RTT активирован");
 
   // ==========================================================================
   // ВЫВОД ТАБЛИЦ МАРШРУТИЗАЦИИ ДЛЯ ДЕБАГА
