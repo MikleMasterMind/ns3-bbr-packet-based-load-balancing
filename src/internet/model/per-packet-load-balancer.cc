@@ -114,7 +114,8 @@ PerPacketLoadBalancer::RouteInput (Ptr<const Packet> p,
   NS_LOG_FUNCTION (this << p << header << idev);
   NS_LOG_INFO("=== PER PACKET BALANCER RouteInput CALLED ===");
   NS_LOG_INFO("Packet from " << header.GetSource() << " to " << header.GetDestination());
-  NS_LOG_INFO("Input device: " << (idev ? idev->GetIfIndex() : -1));\
+  NS_LOG_INFO("Input device: " << (idev ? idev->GetIfIndex() : -1));
+  // return Ipv4StaticRouting::RouteInput(p, header, idev, ucb, mcb, lcb, ecb);
 
   // Получаем Ipv4 объект - ДОЛЖНО БЫТЬ ПЕРВЫМ ДЕЛОМ
   Ptr<Ipv4> ipv4 = m_ipv4;
@@ -195,7 +196,6 @@ PerPacketLoadBalancer::RouteInput (Ptr<const Packet> p,
     if (numAddresses > 0)
     {
       Ipv4InterfaceAddress ifAddr = ipv4->GetAddress(selectedInterface, 0);
-      rtentry->SetSource(ifAddr.GetLocal());
       NS_LOG_DEBUG("Set source address: " << ifAddr.GetLocal());
     }
     else

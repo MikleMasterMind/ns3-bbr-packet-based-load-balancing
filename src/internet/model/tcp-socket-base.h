@@ -1136,7 +1136,7 @@ class TcpSocketBase : public TcpSocket
      *
      * @param currentDelivered Current (S)ACKed bytes
      */
-    void DupAck(uint32_t currentDelivered);
+    virtual void DupAck(uint32_t currentDelivered);
 
     /**
      * @brief Enter CA_CWR state upon receipt of an ECN Echo
@@ -1150,7 +1150,7 @@ class TcpSocketBase : public TcpSocket
      *
      * @param currentDelivered Currently (S)ACKed bytes
      */
-    void EnterRecovery(uint32_t currentDelivered);
+    virtual void EnterRecovery(uint32_t currentDelivered);
 
     /**
      * @brief An RTO event happened
