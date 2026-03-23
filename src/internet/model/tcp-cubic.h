@@ -92,7 +92,7 @@ class TcpCubic : public TcpCongestionOps
     Ptr<TcpCongestionOps> Fork() override;
     void Init(Ptr<TcpSocketState> tcb) override;
 
-  private:
+  public:
     bool m_fastConvergence; //!< Enable or disable fast convergence algorithm
     bool m_tcpFriendliness; //!< Enable or disable TCP-friendliness heuristic
     double m_beta;          //!< Beta for cubic multiplicative increase

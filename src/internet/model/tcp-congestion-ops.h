@@ -196,6 +196,8 @@ class TcpCongestionOps : public Object
      * @return a pointer of the copied object
      */
     virtual Ptr<TcpCongestionOps> Fork() = 0;
+
+    virtual uint32_t GetReTxThreshold (Ptr<const TcpSocketState> tcb) const;
 };
 
 /**

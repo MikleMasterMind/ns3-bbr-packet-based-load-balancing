@@ -6,11 +6,15 @@
 #include "ns3/flow-monitor-module.h"
 #include "ns3/per-packet-load-balancer.h"
 #include "ns3/ping-helper.h"
+#include "ns3/tcp-socket-base.h"
+#include "ns3/config.h"
 #include <fstream>
 
 using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE ("PerPacketLoadBalancerExperiment");
+
+
 
 // Глобальные переменные для мониторинга CWND
 bool firstCwnd = true;
@@ -48,9 +52,9 @@ int main (int argc, char *argv[])
 
   Ptr<OutputStreamWrapper> routingStream = Create<OutputStreamWrapper> (&std::cout);
   // Включаем подробное логирование для отладки
-  LogComponentEnable ("PerPacketLoadBalancerExperiment", LOG_LEVEL_ALL);
+  LogComponentEnable ("PerPacketLoadBalancerExperiment", LOG_LEVEL_INFO);
 
-  LogComponentEnable ("PerPacketLoadBalancer", LOG_LEVEL_INFO);      // Все сообщения
+  // LogComponentEnable ("PerPacketLoadBalancer", LOG_LEVEL_INFO);      // Все сообщения
   // LogComponentEnable ("PerPacketLoadBalancer", LOG_LEVEL_DEBUG);  // Только отладка
   // LogComponentEnable ("PerPacketLoadBalancer", LOG_LEVEL_INFO);   // Только информация
   // LogComponentEnable ("PerPacketLoadBalancer", LOG_LEVEL_WARN);   // Только предупреждения
@@ -75,6 +79,18 @@ int main (int argc, char *argv[])
   cmd.AddValue ("simulationTime", "Время симуляции в секундах", simulationTime);
   cmd.AddValue ("numPaths", "Количество параллельных путей", numPaths);
   cmd.Parse (argc, argv);
+
+  // ==========================================================================
+  // НАСТРОЙКА TCP CUBIC
+  // ==========================================================================
+  NS_LOG_INFO ("Настройка TCP Cubic...");
+
+
+  Config::SetDefault("ns3::TcpL4Protocol::SocketType", StringValue ("ns3::TcpLtcp"));
+  Config::SetDefault ("ns3::TcpSocket::Sack", BooleanValue (true));
+
+  Config::SetDefault ("ns3::TcpSocket::SegmentSize", UintegerValue (1440));
+  Config::SetDefault ("ns3::TcpSocket::InitialCwnd", UintegerValue (10));
 
   // ==========================================================================
   // СОЗДАНИЕ СЕТЕВЫХ УЗЛОВ
@@ -210,6 +226,7 @@ int main (int argc, char *argv[])
     Ipv4InterfaceContainer interfaces = ipv4.Assign (routerToServerDevices[i]);
     routerToServerInterfaces.push_back (interfaces);
   }
+  
 
   // ==========================================================================
   // НАЗНАЧЕНИЕ АДРЕСА СЕРВЕРУ
@@ -262,10 +279,19 @@ int main (int argc, char *argv[])
     NS_LOG_INFO("Добавлен маршрут через интерфейс " << i+2 << " шлюз " << gateway);
   }
 
-	// ДИАГНОСТИКА: проверяем доступность маршрутов
-	NS_LOG_INFO("Проверка доступности маршрутов к 10.1.10.1:");
-	std::vector<uint32_t> interfaces = loadBalancer->GetRouteInterfacesTo(Ipv4Address("10.1.10.1"));
-	NS_LOG_INFO("Найдено интерфейсов для 10.1.10.1: " << interfaces.size());
+  // // ==========================================================================
+	// // НАСТРОЙКА МАРШРУТИЗАЦИИ НА BALANCER
+	// // ==========================================================================
+	// NS_LOG_INFO ("Настройка маршрутизации на balancer...");
+
+	// // Получаем протокол маршрутизации клиента
+	// Ptr<Ipv4> balancerIpv4 = balancerNode.Get(0)->GetObject<Ipv4>();
+	// Ptr<Ipv4StaticRouting> balancerRouting = Ipv4RoutingHelper::GetRouting <Ipv4StaticRouting> (
+	// 		balancerIpv4->GetRoutingProtocol());
+
+	
+	// balancerRouting->AddHostRouteTo(Ipv4Address("10.1.10.1"),
+  //                            Ipv4Address("10.1.2.2"), 2);
 
   // ==========================================================================
   // НАСТРОЙКА СТАТИЧЕСКОЙ МАРШРУТИЗАЦИИ НА МАРШРУТИЗАТОРАХ
@@ -294,8 +320,6 @@ int main (int argc, char *argv[])
                                  balancerToRouterInterfaces[i].GetAddress(0),
                                  balancerInterfaceIndex);
 
-    // NS_LOG_INFO ("Таблица маршрутизации роутера:" << i);
-    // routerRouting->PrintRoutingTable (routingStream, Time::S);
     }
 
   // ==========================================================================
@@ -328,6 +352,10 @@ int main (int argc, char *argv[])
                              clientToBalancerInterface.GetAddress(1), 1);
 	NS_LOG_INFO("Добавлен маршрут по умолчанию через " << clientToBalancerInterface.GetAddress(1));
 
+
+
+  
+
   // ==========================================================================
   // НАСТРОЙКА ПРИЛОЖЕНИЙ ДЛЯ ГЕНЕРАЦИИ ТРАФИКА
   // ==========================================================================
@@ -354,30 +382,22 @@ int main (int argc, char *argv[])
   clientApp.Stop (simulationTime - Seconds (1));  // Заканчивает за 1 секунду до конца
 
   // ==========================================================================
-  // МОНИТОРИНГ CWND - ДОБАВЬ СЮДА
+  // АКТИВАЦИЯ LTCP ТРАССИРОВКИ ПОСЛЕ СОЗДАНИЯ ПРИЛОЖЕНИЙ
   // ==========================================================================
-  NS_LOG_INFO ("Настройка мониторинга CWND...");
-
-  /// ДОБАВЬ ЭТО ДЛЯ МОНИТОРИНГА CWND:
-  std::string dir = "results/data/";
-  std::string dirToSave = "mkdir -p " + dir;
-  system (dirToSave.c_str ());
+  // NS_LOG_INFO ("Активация LTCP динамического порога dupACK...");
   
-  // Мониторинг CWND для первого клиента
-  Simulator::Schedule (Seconds (1 + 0.000001), &TraceCwnd, dir + "cwnd.data");
-  
-  NS_LOG_INFO("Мониторинг CWND активирован");
+  // Config::Connect("/NodeList/*/$ns3::TcpL4Protocol/SocketList/*",
+  //               MakeCallback(&RegisterSocket));
 
+  // // Включаем LTCP после старта клиента
+  // Simulator::Schedule(Seconds(1.05), []() {
+  //   Config::Connect("/NodeList/*/$ns3::TcpL4Protocol/SocketList/*/CongestionWindow",
+  //                   MakeCallback(&LtcpCwndTracer));
 
-  // ==========================================================================
-  // НАСТРОЙКА TCP CUBIC
-  // ==========================================================================
-  NS_LOG_INFO ("Настройка TCP Cubic...");
-  Config::SetDefault ("ns3::TcpL4Protocol::SocketType", StringValue ("ns3::TcpCubic"));
-  Config::SetDefault ("ns3::TcpSocketBase::Sack", BooleanValue (false));
-  Config::SetDefault ("ns3::TcpSocket::SegmentSize", UintegerValue (1440));
-  Config::SetDefault ("ns3::TcpSocket::InitialCwnd", UintegerValue (10));
+  //   NS_LOG_INFO("LTCP: dynamic dupACK threshold activated");
+  // });
 
+  //   NS_LOG_INFO("LTCP: dynamic dupACK threshold activated");
   // ==========================================================================
   // ВЫВОД ТАБЛИЦ МАРШРУТИЗАЦИИ ДЛЯ ДЕБАГА
   // ==========================================================================
@@ -400,7 +420,7 @@ int main (int argc, char *argv[])
 	}
 
   NS_LOG_INFO ("Таблица маршрутизации балансировщика:");
-  loadBalancer->PrintRoutingTable (routingStream, Time::S);
+  balancerNode.Get(0)->GetObject<Ipv4>()->GetRoutingProtocol()->PrintRoutingTable (routingStream, Time::S);
 
 	NS_LOG_INFO("Маршруты сервера:");
 	serverIpv4 = serverNode.Get(0)->GetObject<Ipv4>();
@@ -426,37 +446,6 @@ int main (int argc, char *argv[])
 					}
 			}
 	}
-
-	// ==========================================================================
-	// ПРОВЕРКА МАРШРУТИЗАЦИИ ПЕРЕД ЗАПУСКОМ
-	// ==========================================================================
-	NS_LOG_INFO("=== FINAL ROUTING CHECK ===");
-
-	// Проверяем, что балансировщик видит multiple маршруты
-	std::vector<uint32_t> finalInterfaces = loadBalancer->GetRouteInterfacesTo(Ipv4Address("10.1.10.1"));
-	NS_LOG_INFO("Final route check - interfaces to 10.1.10.1: " << finalInterfaces.size());
-	for (uint32_t i = 0; i < finalInterfaces.size(); i++) {
-			NS_LOG_INFO("  Interface " << finalInterfaces[i] << 
-									" -> Gateway: " << loadBalancer->GetGatewayForInterface(finalInterfaces[i], Ipv4Address("10.1.10.1")));
-	}
-
-	// Проверяем, что клиент может достичь сервера
-	clientIpv4 = clientNode.Get(0)->GetObject<Ipv4>();
-	Ptr<Ipv4Route> testRoute;
-	Socket::SocketErrno sockerr;
-	Ipv4Header testHeader;
-	testHeader.SetDestination(Ipv4Address("10.1.10.1"));
-	testHeader.SetSource(Ipv4Address("10.1.1.1"));
-
-	testRoute = clientIpv4->GetRoutingProtocol()->RouteOutput(
-			Create<Packet>(), testHeader, nullptr, sockerr);
-
-	if (testRoute) {
-			NS_LOG_INFO("Client can route to server: " << testRoute->GetGateway() << 
-									" via interface " << testRoute->GetOutputDevice()->GetIfIndex());
-	} else {
-			NS_LOG_ERROR("Client cannot route to server!");
-	}
   
 
   // ==========================================================================
@@ -466,6 +455,20 @@ int main (int argc, char *argv[])
   
   FlowMonitorHelper flowMonitor;
   Ptr<FlowMonitor> monitor = flowMonitor.InstallAll ();  // Мониторинг на всех узлах
+
+  // ==========================================================================
+  // МОНИТОРИНГ CWND - ДОБАВЬ СЮДА
+  // ==========================================================================
+  NS_LOG_INFO ("Настройка мониторинга CWND...");
+
+  /// ДОБАВЬ ЭТО ДЛЯ МОНИТОРИНГА CWND:
+  std::string dir = "results/data/";
+  std::string dirToSave = "mkdir -p " + dir;
+  system (dirToSave.c_str ());
+
+  Simulator::Schedule (Seconds (1 + 0.1), &TraceCwnd, dir + "cwnd.data");
+  NS_LOG_INFO("Мониторинг CWND активирован");
+
 
   // ==========================================================================
   // ЗАПУСК СИМУЛЯЦИИ
@@ -514,10 +517,7 @@ int main (int argc, char *argv[])
   }
 
 
-  NS_LOG_INFO("Данные сохранены в папке result/:");
-  NS_LOG_INFO("  - cwnd_data.txt: окно перегрузки");
-  NS_LOG_INFO("  - rtt_data.txt: время RTT");
-  NS_LOG_INFO("  - throughput_data.txt: пропускная способность");
+  NS_LOG_INFO("Данные сохранены в папке results/data/");
 
   // ==========================================================================
   // ЗАВЕРШЕНИЕ СИМУЛЯЦИИ

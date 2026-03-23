@@ -76,6 +76,11 @@ TcpCongestionOps::CongControl(Ptr<TcpSocketState> tcb,
     NS_LOG_FUNCTION(this << tcb);
 }
 
+uint32_t TcpCongestionOps::GetReTxThreshold (Ptr<const TcpSocketState> tcb) const
+{
+  return 0; // 0 означает использовать статическое значение m_retxThresh из TcpSocketBase
+}
+
 // RENO
 
 NS_OBJECT_ENSURE_REGISTERED(TcpNewReno);
