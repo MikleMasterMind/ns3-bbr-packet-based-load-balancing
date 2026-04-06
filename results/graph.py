@@ -23,5 +23,5 @@ ax1.grid(True)
 # ax4.grid(True)
 
 plt.tight_layout()
-plt.savefig('results/graph/ltcp_cubic_analysis.png', dpi=300)
+plt.savefig('results/graph/ltcp_cubic_analysis1.png', dpi=300)
 plt.show()

@@ -234,6 +234,71 @@ PerPacketLoadBalancer::RouteInput (Ptr<const Packet> p,
   }
 }
 
+// =====================
+// RouteOutput: for locally generated packets (ACK spraying)
+// =====================
+Ptr<Ipv4Route>
+PerPacketLoadBalancer::RouteOutput (Ptr<Packet> p,
+                                   const Ipv4Header& header,
+                                   Ptr<NetDevice> oif,
+                                   Socket::SocketErrno& sockerr)
+{
+  NS_LOG_FUNCTION (this << header.GetDestination ());
+
+  Ptr<Ipv4> ipv4 = m_ipv4;
+  if (!ipv4)
+    {
+      sockerr = Socket::ERROR_NOROUTETOHOST;
+      return nullptr;
+    }
+
+  // If user forced output interface, fallback to base behavior
+  if (oif)
+    {
+      return Ipv4StaticRouting::RouteOutput (p, header, oif, sockerr);
+    }
+
+  Ipv4Address dest = header.GetDestination ();
+
+  std::vector<uint32_t> ifs = GetRouteInterfacesTo (dest);
+
+  if (ifs.size () <= 1)
+    {
+      return Ipv4StaticRouting::RouteOutput (p, header, oif, sockerr);
+    }
+
+  // Make index safe even if number of routes changes
+  m_currentInterfaceIndex %= ifs.size ();
+  uint32_t selectedIf = ifs[m_currentInterfaceIndex];
+  m_currentInterfaceIndex = (m_currentInterfaceIndex + 1) % ifs.size ();
+
+  Ptr<NetDevice> outDev = ipv4->GetNetDevice (selectedIf);
+  if (!outDev)
+    {
+      sockerr = Socket::ERROR_NOROUTETOHOST;
+      return nullptr;
+    }
+
+  // Source address: take first address on selected interface
+  if (ipv4->GetNAddresses (selectedIf) == 0)
+    {
+      sockerr = Socket::ERROR_NOROUTETOHOST;
+      return nullptr;
+    }
+
+  Ipv4InterfaceAddress ifAddr = ipv4->GetAddress (selectedIf, 0);
+  Ipv4Address gw = GetGatewayForInterface (selectedIf, dest);
+
+  Ptr<Ipv4Route> rt = Create<Ipv4Route> ();
+  rt->SetOutputDevice (outDev);
+  rt->SetSource (ifAddr.GetLocal ());
+  rt->SetDestination (dest);
+  rt->SetGateway (gw);
+
+  sockerr = Socket::ERROR_NOTERROR;
+  return rt;
+}
+
 
 void
 PerPacketLoadBalancer::PrintRoutingTable (Ptr<OutputStreamWrapper> stream, Time::Unit unit) const

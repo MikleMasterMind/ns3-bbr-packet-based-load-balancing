@@ -13,6 +13,7 @@
 #include "ns3/log.h"
 #include "ns3/packet.h"
 #include "ns3/simulator.h"
+// #include "ns3/user-constants.h"
 
 #include <algorithm>
 #include <iostream>
@@ -910,6 +911,52 @@ TcpTxBuffer::UpdateLostCount()
     NS_LOG_INFO("Status after the update: " << *this);
     ConsistencyCheck();
 }
+
+#ifdef NS3_IDFEF_SACK_LOSS_CLASSIFICATION
+uint32_t
+TcpTxBuffer::GetMaxLossClassificationRun() const
+{
+    NS_LOG_FUNCTION(this);
+
+    uint32_t currentRun = 0;
+    uint32_t maxRun = 0;
+
+    for (auto it = m_sentList.begin(); it != m_sentList.end(); ++it)
+    {
+        const TcpTxItem* item = *it;
+
+        if (item->m_sacked)
+        {
+            currentRun = 0;
+            continue;
+        }
+
+        if (item->m_lost)
+        {
+            ++currentRun;
+            maxRun = std::max(maxRun, currentRun);
+        }
+        else
+        {
+            currentRun = 0;
+        }
+    }
+
+    return maxRun;
+}
+
+bool
+TcpTxBuffer::HasSuccessiveLossClassification() const
+{
+    NS_LOG_FUNCTION(this);
+
+    const uint32_t maxRun = GetMaxLossClassificationRun();
+
+    NS_LOG_INFO("Successive loss classification: maxRun=" << maxRun);
+
+    return maxRun > MAX_FOLLOWING_LOSS;
+}
+#endif
 
 bool
 TcpTxBuffer::IsLost(const SequenceNumber32& seq) const

@@ -27,6 +27,11 @@ public:
                     const LocalDeliverCallback& lcb,
                     const ErrorCallback& ecb) override;
 
+  Ptr<Ipv4Route> RouteOutput (Ptr<Packet> p,
+                                   const Ipv4Header& header,
+                                   Ptr<NetDevice> oif,
+                                   Socket::SocketErrno& sockerr) override;
+
 
   void PrintRoutingTable (Ptr<OutputStreamWrapper> stream, Time::Unit unit) const;                
 

@@ -253,6 +253,7 @@ set(header_files
     model/udp-socket.h
     model/windowed-filter.h
     model/tcp-ltcp.h
+    user-constants.h
 )
 
 set(private_header_files)
