@@ -1,4 +1,4 @@
 build
 cmake-cache
 .lock-ns3_darwin_build
-*.pcap
+result/*.pcap
