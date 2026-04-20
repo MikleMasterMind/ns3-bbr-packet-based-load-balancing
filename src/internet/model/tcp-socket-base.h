@@ -19,6 +19,7 @@
 #include "ns3/sequence-number.h"
 #include "ns3/timer.h"
 #include "ns3/traced-value.h"
+#include "ns3/user-constants.h"
 
 #include <queue>
 #include <stdint.h>
@@ -1414,6 +1415,18 @@ class TcpSocketBase : public TcpSocket
     uint32_t m_timestampToEcho{0};  //!< Timestamp to echo
 
     EventId m_sendPendingDataEvent{}; //!< micro-delay event to send pending data
+
+    // TCP NCE fields
+#ifdef TCP_NCE_ENABLED
+  Time m_rttMin;                     // минимальное наблюдаемое RTT
+  uint32_t m_bottleneckBw;           // пропускная способность узкого места (бит/с)
+  uint32_t m_queueThreshold;         // порог очереди (пакетов)
+  bool m_nceDetected;                // флаг обнаружения не-конгестивного события
+  uint32_t m_delayThresh;            // динамический порог задержки (кол-во дублирующих ACK)
+  uint32_t m_addDupAcks;             // счётчик дополнительных дублирующих ACK
+  SequenceNumber32 m_nceLostSeq;     // порядковый номер потерянного пакета
+  bool m_inRetransmissionDelay;      // флаг нахождения в состоянии задержки повторной передачи
+#endif
 
     // Fast Retransmit and Recovery
     SequenceNumber32 m_recover{

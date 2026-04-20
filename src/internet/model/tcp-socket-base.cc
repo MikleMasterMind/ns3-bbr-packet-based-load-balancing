@@ -1808,7 +1808,12 @@ TcpSocketBase::DupAck(uint32_t currentDelivered)
         // can be equal and larger than m_retxThresh and we should avoid entering
         // CA_RECOVERY and reducing sending rate again.
 #ifdef TCP_SOCKET_BASE_USE_NEW_DUPACK_LOGIC
+#ifdef NS3_IDFEF_SACK_LOSS_CLASSIFICATION
+        NS_ASSERT((m_dupAckCount <= dupAckThresh) || m_recoverActive ||
+                  (m_sackEnabled && m_dupAckCount > dupAckThresh));
+#else
         NS_ASSERT((m_dupAckCount <= dupAckThresh) || m_recoverActive);
+#endif
 #else
         NS_ASSERT((m_dupAckCount <= m_retxThresh) || m_recoverActive);
 #endif
@@ -1828,8 +1833,17 @@ TcpSocketBase::DupAck(uint32_t currentDelivered)
         if ((m_dupAckCount >= dupAckThresh) &&
             ((m_highRxAckMark >= m_recover) || (!m_recoverActive)))
         {
+#ifdef NS3_IDFEF_SACK_LOSS_CLASSIFICATION
+            if (!m_sackEnabled || m_txBuffer->HasSuccessiveLossClassification())
+            {
+                // NS_LOG_UNCOND("M");
+                EnterRecovery(currentDelivered);
+                NS_ASSERT(m_tcb->m_congState == TcpSocketState::CA_RECOVERY);
+            }
+#else
             EnterRecovery(currentDelivered);
             NS_ASSERT(m_tcb->m_congState == TcpSocketState::CA_RECOVERY);
+#endif
         }
 #else
         if ((m_dupAckCount == m_retxThresh) &&
@@ -1845,8 +1859,16 @@ TcpSocketBase::DupAck(uint32_t currentDelivered)
         // go to step (4).  Note that m_highRxAckMark is (HighACK + 1)
         else if (m_txBuffer->IsLost(m_highRxAckMark))
         {
+#ifdef NS3_IDFEF_SACK_LOSS_CLASSIFICATION
+            if (!m_sackEnabled || m_txBuffer->HasSuccessiveLossClassification())
+            {
+                EnterRecovery(currentDelivered);
+                NS_ASSERT(m_tcb->m_congState == TcpSocketState::CA_RECOVERY);
+            }
+#else
             EnterRecovery(currentDelivered);
             NS_ASSERT(m_tcb->m_congState == TcpSocketState::CA_RECOVERY);
+#endif
         }
         else
         {

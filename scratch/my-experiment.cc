@@ -130,6 +130,9 @@ ThroughputSampler()
     uint32_t numBadPaths = 1;    
     Time goodLinkDelay = MilliSeconds (1);   
     Time badLinkDelay = MilliSeconds (10);   
+
+    bool lossEnabled = false;
+    double lossRate = 0.0;
     
     bool ackFeatureExperiment = false;
     #ifdef TCP_SOCKET_BASE_USE_NEW_DUPACK_LOGIC
@@ -142,31 +145,49 @@ ThroughputSampler()
     #endif
 
 
-    std::cout << ackFeatureExperiment << std::endl;
+    std::cout << lossClassification << std::endl;
     
     CommandLine cmd;
     cmd.AddValue("simulationTime", "Simulation time in seconds", simulationTime);
     cmd.AddValue("numPaths", "Number of parallel paths", numPaths);
     cmd.AddValue("numBadPaths", "Number of bad paths starting from path 1", numBadPaths);
+    cmd.AddValue("lossRate", "Packet loss rate (0.0 - 1.0) for balancer->router links", lossRate);
     cmd.Parse(argc, argv);
+
+    if ((lossRate > 0.0) && (lossRate < 1.0)) {
+      lossEnabled = true;
+    }
 
     numBadPaths = std::min(numBadPaths, numPaths);
 
     // Directories
     std::vector<std::string> resultPathParts = {"result/data"};
-    if (ackFeatureExperiment) {
-      resultPathParts.push_back("dupackfeachure");
-    }
-    if (lossClassification)
+    // Добавляем информацию о потерях в путь
+    if (lossEnabled)
     {
-        resultPathParts.push_back("lossClassification");
+      std::ostringstream lossStr;
+      lossStr << "loss-" << lossRate;
+      resultPathParts.push_back(lossStr.str());
     }
-    resultPathParts.push_back("balancing");
+    else
+    {
+      resultPathParts.push_back(std::string("wihtout_loss"));
+    }
+    if (lossClassification) {
+      resultPathParts.push_back("lossClassification");
+    }
+    else if (ackFeatureExperiment)
+    {
+        resultPathParts.push_back("dupackfeachure");
+    }
+    else 
+    {
+        resultPathParts.push_back("base");
+    }
     resultPathParts.push_back(std::to_string(numPaths) + "-numPaths");
     resultPathParts.push_back(std::to_string(numBadPaths) + "-numBadPaths");
     resultPathParts.push_back(std::string(GOOD_DATA_RATE) + "-goodDataRate" + std::string(GOOD_DELAY) + "-goodDelay");
     resultPathParts.push_back(std::string(BAD_DATA_RATE) + "-badDataRate" + std::string(BAD_DELAY) + "-badDelay");
-
     std::ostringstream dirBuilder;
     for (const auto& part : resultPathParts)
     {
@@ -183,6 +204,8 @@ ThroughputSampler()
 
     Config::SetDefault ("ns3::TcpSocket::SegmentSize", UintegerValue (1440));
     Config::SetDefault ("ns3::TcpSocket::InitialCwnd", UintegerValue (10));
+    Config::SetDefault("ns3::TcpSocket::SndBufSize", UintegerValue(1 << 20)); // 1 МБ
+    Config::SetDefault("ns3::TcpSocket::RcvBufSize", UintegerValue(1 << 20));
 
     // ==========================================================================
     // СОЗДАНИЕ СЕТЕВЫХ УЗЛОВ
@@ -220,6 +243,16 @@ ThroughputSampler()
     std::vector<NetDeviceContainer> routerToServerDevices;    // Маршрутизаторы → Сервер
     NetDeviceContainer clientToBalancerDevice;                // Клиент → Балансировщик
 
+    // --- Настройка модели потерь (если включена) ---
+    Ptr<RateErrorModel> em = nullptr;
+    if (lossEnabled && lossRate > 0.0)
+    {
+        em = CreateObject<RateErrorModel>();
+        em->SetAttribute("ErrorRate", DoubleValue(lossRate));
+        em->SetAttribute("ErrorUnit", StringValue("ERROR_UNIT_PACKET"));
+        NS_LOG_INFO("Создана модель потерь с вероятностью " << lossRate);
+    }
+
     // Создание высокоскоростного соединения Клиент → Балансировщик
     p2p.SetDeviceAttribute ("DataRate", StringValue ("10Gbps"));
     p2p.SetChannelAttribute ("Delay", StringValue ("1ms"));
@@ -235,9 +268,22 @@ ThroughputSampler()
         p2p.SetDeviceAttribute ("DataRate", StringValue ("1Gbps"));
         p2p.SetChannelAttribute ("Delay", StringValue ("1ms"));
       }
+
+      // --- Назначение модели потерь на устройства ---
+      if (em)
+      {
+          p2p.SetDeviceAttribute ("ReceiveErrorModel", PointerValue(em));
+      }
+        
       
       NetDeviceContainer devices = p2p.Install (balancerNode.Get (0), routerNodes.Get (i));
       balancerToRouterDevices.push_back (devices);
+
+      // Сбрасываем ReceiveErrorModel, чтобы не применять к следующим линкам
+      if (em)
+      {
+          p2p.SetDeviceAttribute ("ReceiveErrorModel", PointerValue(CreateObject<RateErrorModel>()));
+      }
     }
 
     // Создание соединений Маршрутизаторы → Сервер
@@ -562,6 +608,6 @@ ThroughputSampler()
 
     Simulator::Destroy ();
     NS_LOG_INFO ("Симуляция завершена.");
-    
+    NS_LOG_INFO ("Saved to:" + dir);
     return 0;
   }

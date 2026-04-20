@@ -17,6 +17,7 @@
 #include "ns3/object.h"
 #include "ns3/sequence-number.h"
 #include "ns3/traced-value.h"
+#include "ns3/user-constants.h"
 
 namespace ns3
 {
@@ -299,6 +300,26 @@ class TcpTxBuffer : public Object
      * @return true if the sequence is supposed to be lost, false otherwise
      */
     bool IsLost(const SequenceNumber32& seq) const;
+
+#ifdef NS3_IDFEF_SACK_LOSS_CLASSIFICATION
+    /**
+     * @brief Count the longest run of successive lost unsacked segments.
+     * @return longest run length in segments.
+     */
+    uint32_t GetMaxLossClassificationRun() const;
+#endif
+
+#ifdef NS3_IDFEF_SACK_LOSS_CLASSIFICATION
+    /**
+     * @brief Check whether the scoreboard contains a burst of successive lost segments.
+     *
+     * The burst length threshold is derived from the current duplicate ACK threshold.
+     * This is used to distinguish packet reordering from congestion-related losses.
+     *
+     * @return true if a successive loss burst longer than the configured threshold exists.
+     */
+    bool HasSuccessiveLossClassification() const;
+#endif
 
     /**
      * @brief Get the next sequence number to transmit, according to RFC 6675
