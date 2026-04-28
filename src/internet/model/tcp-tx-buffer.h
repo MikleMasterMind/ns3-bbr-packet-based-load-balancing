@@ -301,7 +301,7 @@ class TcpTxBuffer : public Object
      */
     bool IsLost(const SequenceNumber32& seq) const;
 
-#ifdef NS3_IDFEF_SACK_LOSS_CLASSIFICATION
+#ifdef LTCP_ENABLED
     /**
      * @brief Count the longest run of successive lost unsacked segments.
      * @return longest run length in segments.
@@ -309,7 +309,7 @@ class TcpTxBuffer : public Object
     uint32_t GetMaxLossClassificationRun() const;
 #endif
 
-#ifdef NS3_IDFEF_SACK_LOSS_CLASSIFICATION
+#ifdef LTCP_ENABLED
     /**
      * @brief Check whether the scoreboard contains a burst of successive lost segments.
      *
@@ -319,6 +319,10 @@ class TcpTxBuffer : public Object
      * @return true if a successive loss burst longer than the configured threshold exists.
      */
     bool HasSuccessiveLossClassification() const;
+#endif
+
+#ifdef LTCP_ENABLED
+bool HasAnyLoss() const;
 #endif
 
     /**

@@ -134,18 +134,16 @@ ThroughputSampler()
     bool lossEnabled = false;
     double lossRate = 0.0;
     
-    bool ackFeatureExperiment = false;
-    #ifdef TCP_SOCKET_BASE_USE_NEW_DUPACK_LOGIC
-    ackFeatureExperiment = true;
+    bool ltcp = false;
+    #ifdef LTCP_ENABLED
+    ltcp = true;
     #endif
 
-    bool lossClassification = false;
-    #ifdef NS3_IDFEF_SACK_LOSS_CLASSIFICATION
-    lossClassification = true;
+    bool nce = false;
+    #ifdef TCP_NCE_ENABLED
+    nce = true;
     #endif
 
-
-    std::cout << lossClassification << std::endl;
     
     CommandLine cmd;
     cmd.AddValue("simulationTime", "Simulation time in seconds", simulationTime);
@@ -173,21 +171,22 @@ ThroughputSampler()
     {
       resultPathParts.push_back(std::string("wihtout_loss"));
     }
-    if (lossClassification) {
-      resultPathParts.push_back("lossClassification");
+    
+    resultPathParts.push_back(std::to_string(numPaths) + "-numPaths");
+    resultPathParts.push_back(std::to_string(numBadPaths) + "-numBadPaths");
+    resultPathParts.push_back(std::string(GOOD_DATA_RATE) + "-goodDataRate" + std::string(GOOD_DELAY) + "-goodDelay");
+    resultPathParts.push_back(std::string(BAD_DATA_RATE) + "-badDataRate" + std::string(BAD_DELAY) + "-badDelay");
+
+    if (ltcp) {
+      resultPathParts.push_back("ltcp");
     }
-    else if (ackFeatureExperiment)
-    {
-        resultPathParts.push_back("dupackfeachure");
+    else if (nce) {
+        resultPathParts.push_back("nce");
     }
     else 
     {
         resultPathParts.push_back("base");
     }
-    resultPathParts.push_back(std::to_string(numPaths) + "-numPaths");
-    resultPathParts.push_back(std::to_string(numBadPaths) + "-numBadPaths");
-    resultPathParts.push_back(std::string(GOOD_DATA_RATE) + "-goodDataRate" + std::string(GOOD_DELAY) + "-goodDelay");
-    resultPathParts.push_back(std::string(BAD_DATA_RATE) + "-badDataRate" + std::string(BAD_DELAY) + "-badDelay");
     std::ostringstream dirBuilder;
     for (const auto& part : resultPathParts)
     {
@@ -204,8 +203,8 @@ ThroughputSampler()
 
     Config::SetDefault ("ns3::TcpSocket::SegmentSize", UintegerValue (1440));
     Config::SetDefault ("ns3::TcpSocket::InitialCwnd", UintegerValue (10));
-    Config::SetDefault("ns3::TcpSocket::SndBufSize", UintegerValue(1 << 20)); // 1 МБ
-    Config::SetDefault("ns3::TcpSocket::RcvBufSize", UintegerValue(1 << 20));
+    Config::SetDefault("ns3::TcpSocket::SndBufSize", UintegerValue(1 << 30)); // 1 МБ
+    Config::SetDefault("ns3::TcpSocket::RcvBufSize", UintegerValue(1 << 30));
 
     // ==========================================================================
     // СОЗДАНИЕ СЕТЕВЫХ УЗЛОВ
@@ -262,11 +261,11 @@ ThroughputSampler()
     for (uint32_t i = 0; i < numPaths; i++)
     {
       if (i < numBadPaths) {
-        p2p.SetDeviceAttribute ("DataRate", StringValue ("1Gbps"));
-        p2p.SetChannelAttribute ("Delay", StringValue ("3ms"));
+        p2p.SetDeviceAttribute ("DataRate", StringValue (BAD_DATA_RATE));
+        p2p.SetChannelAttribute ("Delay", StringValue (BAD_DELAY));
       } else {
-        p2p.SetDeviceAttribute ("DataRate", StringValue ("1Gbps"));
-        p2p.SetChannelAttribute ("Delay", StringValue ("1ms"));
+        p2p.SetDeviceAttribute ("DataRate", StringValue (GOOD_DATA_RATE));
+        p2p.SetChannelAttribute ("Delay", StringValue (GOOD_DELAY));
       }
 
       // --- Назначение модели потерь на устройства ---
@@ -420,27 +419,27 @@ ThroughputSampler()
 
     // 3) Server: optionally use PerPacketLoadBalancer so ACKs are sprayed (RouteOutput)
     serverIpv4 = serverNode.Get(0)->GetObject<Ipv4>();
-    if (ackFeatureExperiment)
-    {
-        Ptr<PerPacketLoadBalancer> serverLb = CreateObject<PerPacketLoadBalancer>();
-        serverIpv4->SetRoutingProtocol(serverLb);
+    // if (ackFeatureExperiment)
+    // {
+    Ptr<PerPacketLoadBalancer> serverLb = CreateObject<PerPacketLoadBalancer>();
+    serverIpv4->SetRoutingProtocol(serverLb);
 
-        // Multiple routes to client host via each router interface (used by RouteOutput round-robin)
-        for (uint32_t i = 0; i < numPaths; i++)
-        {
-            uint32_t ifToRouter = serverIpv4->GetInterfaceForDevice(routerToServerDevices[i].Get(1));
-            Ipv4Address routerNextHop =
-                routerToServerInterfaces[i].GetAddress(0); // router address on that link
-            serverLb->AddHostRouteTo(clientToBalancerInterface.GetAddress(0), routerNextHop, ifToRouter);
-        }
-    }
-    else
+    // Multiple routes to client host via each router interface (used by RouteOutput round-robin)
+    for (uint32_t i = 0; i < numPaths; i++)
     {
-        Ptr<Ipv4StaticRouting> serverStatic = staticHelper.GetStaticRouting(serverIpv4);
-        uint32_t ifToRouter = serverIpv4->GetInterfaceForDevice(routerToServerDevices[0].Get(1));
-        Ipv4Address routerNextHop = routerToServerInterfaces[0].GetAddress(0);
-        serverStatic->AddHostRouteTo(clientToBalancerInterface.GetAddress(0), routerNextHop, ifToRouter);
+        uint32_t ifToRouter = serverIpv4->GetInterfaceForDevice(routerToServerDevices[i].Get(1));
+        Ipv4Address routerNextHop =
+            routerToServerInterfaces[i].GetAddress(0); // router address on that link
+        serverLb->AddHostRouteTo(clientToBalancerInterface.GetAddress(0), routerNextHop, ifToRouter);
     }
+    // }
+    // else
+    // {
+    //     Ptr<Ipv4StaticRouting> serverStatic = staticHelper.GetStaticRouting(serverIpv4);
+    //     uint32_t ifToRouter = serverIpv4->GetInterfaceForDevice(routerToServerDevices[0].Get(1));
+    //     Ipv4Address routerNextHop = routerToServerInterfaces[0].GetAddress(0);
+    //     serverStatic->AddHostRouteTo(clientToBalancerInterface.GetAddress(0), routerNextHop, ifToRouter);
+    // }
 
     // 4) Client: static route to service IP via balancer
     Ptr<Ipv4> clientIpv4 = clientNode.Get(0)->GetObject<Ipv4>();

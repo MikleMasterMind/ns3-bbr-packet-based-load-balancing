@@ -195,6 +195,18 @@ TcpSocketBase::GetTypeId()
                                           "On",
                                           TcpSocketState::AcceptOnly,
                                           "AcceptOnly"))
+#ifdef TCP_NCE_ENABLED
+            .AddAttribute("BottleneckBandwidth",
+                        "Bottleneck link bandwidth for TCP NCE (bps)",
+                        UintegerValue(1000000000),
+                        MakeUintegerAccessor(&TcpSocketBase::m_bottleneckBw),
+                        MakeUintegerChecker<uint32_t>())
+            .AddAttribute("QueueThreshold",
+                        "Queue length threshold for congestion detection (packets)",
+                        UintegerValue(90),
+                        MakeUintegerAccessor(&TcpSocketBase::m_queueThreshold),
+                        MakeUintegerChecker<uint32_t>())
+#endif                              
             .AddTraceSource("RTO",
                             "Retransmission timeout",
                             MakeTraceSourceAccessor(&TcpSocketBase::m_rto),
@@ -1730,6 +1742,23 @@ TcpSocketBase::EnterRecovery(uint32_t currentDelivered)
     // these steps are done after the ProcessAck function (SendPendingData)
 }
 
+#ifdef TCP_NCE_ENABLED
+void
+TcpSocketBase::DoRetransmit(SequenceNumber32 seq)
+{
+    NS_LOG_FUNCTION(this << seq);
+    if (!m_txBuffer->IsLost(seq))
+    {
+        NS_LOG_WARN("DoRetransmit: segment " << seq << " not marked as lost, skipping");
+        return;
+    }
+    m_tcb->m_nextTxSequence = seq;
+    uint32_t sz = SendDataPacket(seq, m_tcb->m_segmentSize, true);
+    NS_ASSERT_MSG(sz > 0, "Failed to retransmit segment " << seq);
+}
+#endif
+
+
 void
 TcpSocketBase::DupAck(uint32_t currentDelivered)
 {
@@ -1739,9 +1768,50 @@ TcpSocketBase::DupAck(uint32_t currentDelivered)
     // DupThresh = max(3, cwnd in segments)
     // LTCP paper: trigger congestion avoidance only after enough dupacks,
     // where the threshold grows with cwnd.
-#ifdef TCP_SOCKET_BASE_USE_NEW_DUPACK_LOGIC
+#ifdef LTCP_ENABLED
     uint32_t dupAckThresh = std::max<uint32_t>(3, m_tcb->GetCwndInSegments());
     SetRetxThresh(dupAckThresh);
+#endif
+
+#ifdef TCP_NCE_ENABLED
+    Time rttNow = m_rtt->GetEstimate();
+    if (m_rttMin.IsZero() || rttNow < m_rttMin)
+        m_rttMin = rttNow;
+
+    uint32_t queueLength = 0;
+    if (m_bottleneckBw > 0 && m_tcb->m_segmentSize > 0)
+    {
+        double diff = rttNow.GetSeconds() - m_rttMin.GetSeconds();
+        if (diff > 0)
+            queueLength = static_cast<uint32_t>(diff * m_bottleneckBw / (m_tcb->m_segmentSize * 8));
+    }
+    bool isCongestion = (queueLength > m_queueThreshold);
+#endif
+
+#ifdef TCP_NCE_ENABLED
+    if (m_inRetransmissionDelay)
+    {
+        NS_LOG_INFO("NCE: handling additional dupack in Retransmission Delay");
+        ++m_addDupAcks;
+        // Увеличиваем cwnd на 1 MSS для поддержки ack clocking
+        m_tcb->m_cWnd += m_tcb->m_segmentSize;
+        if (m_tcb->m_cWnd > m_txBuffer->BytesInFlight())
+        {
+            SendPendingData();
+        }
+
+        if (m_addDupAcks >= m_delayThresh)
+        {
+            // Достаточно дополнительных dupack → случайная потеря
+            NS_LOG_INFO("NCE: random loss confirmed, retransmit " << m_nceLostSeq);
+            DoRetransmit(m_nceLostSeq);   // повторная передача без уменьшения cwnd
+            m_inRetransmissionDelay = false;
+            m_nceDetected = false;
+            m_tcb->m_congState = TcpSocketState::CA_OPEN;
+            m_dupAckCount = 0;
+        }
+        return;
+    }
 #endif
 
     // NOTE: We do not count the DupAcks received in CA_LOSS, because we
@@ -1807,13 +1877,9 @@ TcpSocketBase::DupAck(uint32_t currentDelivered)
         // after receiving new ACK smaller than m_recover. After that, m_dupackCount
         // can be equal and larger than m_retxThresh and we should avoid entering
         // CA_RECOVERY and reducing sending rate again.
-#ifdef TCP_SOCKET_BASE_USE_NEW_DUPACK_LOGIC
-#ifdef NS3_IDFEF_SACK_LOSS_CLASSIFICATION
+#ifdef LTCP_ENABLED
         NS_ASSERT((m_dupAckCount <= dupAckThresh) || m_recoverActive ||
                   (m_sackEnabled && m_dupAckCount > dupAckThresh));
-#else
-        NS_ASSERT((m_dupAckCount <= dupAckThresh) || m_recoverActive);
-#endif
 #else
         NS_ASSERT((m_dupAckCount <= m_retxThresh) || m_recoverActive);
 #endif
@@ -1829,46 +1895,133 @@ TcpSocketBase::DupAck(uint32_t currentDelivered)
         //     bandwidth-greedy application in high speed and reliable network
         //     (such as datacenter network) whose sending rate is constrained by
         //     TCP socket buffer size at receiver side.
-#ifdef TCP_SOCKET_BASE_USE_NEW_DUPACK_LOGIC
-        if ((m_dupAckCount >= dupAckThresh) &&
-            ((m_highRxAckMark >= m_recover) || (!m_recoverActive)))
+#ifdef LTCP_ENABLED
+        bool thresholdReached = (m_dupAckCount >= dupAckThresh);
+#else
+        bool thresholdReached = (m_dupAckCount == m_retxThresh);
+#endif
+
+        bool canEnterRecovery = thresholdReached &&
+                                ((m_highRxAckMark >= m_recover) || (!m_recoverActive));
+
+if (canEnterRecovery)
         {
-#ifdef NS3_IDFEF_SACK_LOSS_CLASSIFICATION
+
+#ifdef TCP_NCE_ENABLED
+            if (!isCongestion)
+            {
+                // Неконгестивное событие: переходим в Retransmission Delay
+                NS_LOG_INFO("NCE: non-congestion event, entering Retransmission Delay");
+                m_nceDetected = true;
+                m_nceLostSeq = m_txBuffer->HeadSequence();   // предполагаем потерю первого неподтверждённого
+                uint32_t flightBytes = UnAckDataCount();
+                m_delayThresh = (flightBytes / m_tcb->m_segmentSize) - m_retxThresh;
+                m_addDupAcks = 0;
+
+                // Отправляем новый пакет, увеличив cwnd на 1 MSS (без изменения ssthresh)
+                m_tcb->m_cWnd += m_tcb->m_segmentSize;
+                if (m_tcb->m_cWnd > m_txBuffer->BytesInFlight())
+                    SendPendingData();
+
+                m_inRetransmissionDelay = true;
+                return;
+            }
+            // else: перегрузка, идём ниже
+#endif
+
+#ifdef LTCP_ENABLED
+
+            bool hasAnyLoss = m_txBuffer->HasAnyLoss();  // нужно добавить этот метод
+            if (!hasAnyLoss)
+            {
+                // Переупорядочивание – потерь нет, ничего не делаем,
+                // сбрасываем dupAckCount и продолжаем работу
+                NS_LOG_INFO("LTCP: reordering detected, no loss; resetting dupAckCount");
+                m_dupAckCount = 0;
+                // Остаёмся в CA_OPEN или CA_DISORDER ? Лучше перейти в OPEN,
+                // т.к. событие исчерпано
+                m_tcb->m_congState = TcpSocketState::CA_OPEN;
+                return;
+            }
+            // LTCP: classify losses as successive or discrete
             if (!m_sackEnabled || m_txBuffer->HasSuccessiveLossClassification())
             {
-                // NS_LOG_UNCOND("M");
+                // Successive loss -> treat as congestion, enter standard recovery
                 EnterRecovery(currentDelivered);
                 NS_ASSERT(m_tcb->m_congState == TcpSocketState::CA_RECOVERY);
+            }
+            else
+            {
+                // Discrete loss -> retransmit without reducing cwnd
+                SequenceNumber32 lostSeq = m_txBuffer->HeadSequence();
+                NS_LOG_INFO("LTCP: discrete loss, retransmit " << lostSeq <<
+                            " without cwnd reduction");
+                DoRetransmit();
+                m_dupAckCount = 0;
+                m_tcb->m_congState = TcpSocketState::CA_OPEN;
             }
 #else
             EnterRecovery(currentDelivered);
             NS_ASSERT(m_tcb->m_congState == TcpSocketState::CA_RECOVERY);
 #endif
+            return;
         }
-#else
-        if ((m_dupAckCount == m_retxThresh) &&
-            ((m_highRxAckMark >= m_recover) || (!m_recoverActive)))
-        {
-            EnterRecovery(currentDelivered);
-            NS_ASSERT(m_tcb->m_congState == TcpSocketState::CA_RECOVERY);
-        }
-#endif
         // (2) If DupAcks < DupThresh but IsLost (HighACK + 1) returns true
         // (indicating at least three segments have arrived above the current
         // cumulative acknowledgment point, which is taken to indicate loss)
         // go to step (4).  Note that m_highRxAckMark is (HighACK + 1)
         else if (m_txBuffer->IsLost(m_highRxAckMark))
         {
-#ifdef NS3_IDFEF_SACK_LOSS_CLASSIFICATION
+
+#ifdef TCP_NCE_ENABLED
+            if (!isCongestion)
+            {
+                // Аналогично неконгестивному случаю через NCE
+                NS_LOG_INFO("NCE: non-congestion via IsLost, entering Retransmission Delay");
+                m_nceDetected = true;
+                m_nceLostSeq = m_highRxAckMark;
+                uint32_t flightBytes = UnAckDataCount();
+                m_delayThresh = (flightBytes / m_tcb->m_segmentSize) - m_retxThresh;
+                m_addDupAcks = 0;
+
+                m_tcb->m_cWnd += m_tcb->m_segmentSize;
+                if (m_tcb->m_cWnd > m_txBuffer->BytesInFlight())
+                    SendPendingData();
+
+                m_inRetransmissionDelay = true;
+                return;
+            }
+#endif
+
+#ifdef LTCP_ENABLED
+        bool hasAnyLoss = m_txBuffer->HasAnyLoss(); // проверка
+        if (!hasAnyLoss)
+        {
+            NS_LOG_INFO("LTCP: reordering, IsLost false alarm");
+            m_dupAckCount = 0;
+            m_tcb->m_congState = TcpSocketState::CA_OPEN;
+            return;
+        }
             if (!m_sackEnabled || m_txBuffer->HasSuccessiveLossClassification())
             {
                 EnterRecovery(currentDelivered);
                 NS_ASSERT(m_tcb->m_congState == TcpSocketState::CA_RECOVERY);
             }
+            else
+            {
+                // Discrete loss identified via IsLost – directly retransmit the lost segment
+                NS_LOG_INFO("LTCP: discrete loss via IsLost, retransmit " << m_highRxAckMark);
+                m_tcb->m_nextTxSequence = m_highRxAckMark;
+                uint32_t sz = SendDataPacket(m_highRxAckMark, m_tcb->m_segmentSize, true);
+                NS_ASSERT_MSG(sz > 0, "Failed to retransmit segment " << m_highRxAckMark);
+                m_dupAckCount = 0;
+                m_tcb->m_congState = TcpSocketState::CA_OPEN;
+            }
 #else
             EnterRecovery(currentDelivered);
             NS_ASSERT(m_tcb->m_congState == TcpSocketState::CA_RECOVERY);
 #endif
+            return;
         }
         else
         {
@@ -2057,6 +2210,19 @@ TcpSocketBase::ProcessAck(const SequenceNumber32& ackNumber,
                            << " SND.NXT=" << m_tcb->m_nextTxSequence
                            << " in state: " << TcpSocketState::TcpCongStateName[m_tcb->m_congState]
                            << " with m_recover: " << m_recover);
+
+    #ifdef TCP_NCE_ENABLED
+    if (m_inRetransmissionDelay)
+    {
+        NS_LOG_INFO("NCE: new ACK received, reordering confirmed – resetting Retransmission Delay");
+        m_inRetransmissionDelay = false;
+        m_nceDetected = false;
+        m_addDupAcks = 0;
+        m_delayThresh = 0;
+        m_tcb->m_congState = TcpSocketState::CA_OPEN;
+        m_dupAckCount = 0;
+    }
+    #endif
 
     // RFC 6675, Section 5, 3rd paragraph:
     // If the incoming ACK is a duplicate acknowledgment per the definition

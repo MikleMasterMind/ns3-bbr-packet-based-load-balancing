@@ -1418,14 +1418,16 @@ class TcpSocketBase : public TcpSocket
 
     // TCP NCE fields
 #ifdef TCP_NCE_ENABLED
-  Time m_rttMin;                     // минимальное наблюдаемое RTT
-  uint32_t m_bottleneckBw;           // пропускная способность узкого места (бит/с)
-  uint32_t m_queueThreshold;         // порог очереди (пакетов)
-  bool m_nceDetected;                // флаг обнаружения не-конгестивного события
-  uint32_t m_delayThresh;            // динамический порог задержки (кол-во дублирующих ACK)
-  uint32_t m_addDupAcks;             // счётчик дополнительных дублирующих ACK
-  SequenceNumber32 m_nceLostSeq;     // порядковый номер потерянного пакета
-  bool m_inRetransmissionDelay;      // флаг нахождения в состоянии задержки повторной передачи
+  Time     m_rttMin;                // минимальное наблюдавшееся RTT
+  uint32_t m_bottleneckBw;          // пропускная способность узкого места (бит/с)
+  uint32_t m_queueThreshold;        // порог очереди в пакетах (90% буфера)
+  bool     m_nceDetected;           // флаг обнаружения неконгестивного события
+  uint32_t m_delayThresh;           // динамический порог дополнительных dupack
+  uint32_t m_addDupAcks;            // счётчик доп. dupack в состоянии Retransmission Delay
+  SequenceNumber32 m_nceLostSeq;   // номер предполагаемого потерянного сегмента
+  bool     m_inRetransmissionDelay; // находимся ли в состоянии отложенной повторной передачи
+
+  void DoRetransmit(SequenceNumber32 seq);
 #endif
 
     // Fast Retransmit and Recovery

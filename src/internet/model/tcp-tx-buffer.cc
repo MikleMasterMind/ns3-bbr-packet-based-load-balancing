@@ -912,7 +912,7 @@ TcpTxBuffer::UpdateLostCount()
     ConsistencyCheck();
 }
 
-#ifdef NS3_IDFEF_SACK_LOSS_CLASSIFICATION
+#ifdef LTCP_ENABLED
 uint32_t
 TcpTxBuffer::GetMaxLossClassificationRun() const
 {
@@ -955,6 +955,16 @@ TcpTxBuffer::HasSuccessiveLossClassification() const
     NS_LOG_INFO("Successive loss classification: maxRun=" << maxRun);
 
     return maxRun > MAX_FOLLOWING_LOSS;
+}
+
+bool TcpTxBuffer::HasAnyLoss() const
+{
+    for (const auto& item : m_sentList)
+    {
+        if (item->m_lost)   // предполагается, что m_lost уже добавлено и обновляется
+            return true;
+    }
+    return false;
 }
 #endif
 
