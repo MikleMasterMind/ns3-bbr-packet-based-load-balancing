@@ -1,0 +1,13 @@
+#Time(s) Rtt(s) Context
+1.21443 0.0402451 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/RTT
+1.22575 0.0399644 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/RTT
+1.29215 0.0385939 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/RTT
+1.30157 0.0373946 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/RTT
+1.31289 0.0377203 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/RTT
+1.32421 0.0395053 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/RTT
+1.34196 0.0431921 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/RTT
+1.37041 0.0414181 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/RTT
+1.37103 0.0399908 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/RTT
+1.38235 0.036492 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/RTT
+1.39948 0.0355555 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/RTT
+1.41275 0.032736 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/RTT

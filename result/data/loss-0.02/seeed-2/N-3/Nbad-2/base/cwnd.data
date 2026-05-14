@@ -1,0 +1,15 @@
+#Time(s) Cwnd(bytes) Context
+1.21202 5760 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow
+1.33841 7200 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow
+1.60909 4320 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow
+1.66216 5760 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow
+2.78855 1440 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow
+2.81416 4320 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow
+3.81416 1440 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow
+3.84162 2880 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow
+3.88587 4320 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow
+4.06694 5760 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow
+5.13689 1440 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow
+19.1783 2880 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow
+19.2943 4320 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow
+20.3217 1440 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow

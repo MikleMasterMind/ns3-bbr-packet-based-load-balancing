@@ -125,7 +125,7 @@ ThroughputSampler()
     // ==========================================================================
     // НАСТРОЙКА ПАРАМЕТРОВ ЭКСПЕРИМЕНТА
     // ==========================================================================
-    Time simulationTime = Seconds (10);
+    Time simulationTime = Seconds (30);
     uint32_t numPaths = 4;            
     uint32_t numBadPaths = 1;    
     Time goodLinkDelay = MilliSeconds (1);   
@@ -144,12 +144,13 @@ ThroughputSampler()
     nce = true;
     #endif
 
-    
+    int seed = 1;
     CommandLine cmd;
     cmd.AddValue("simulationTime", "Simulation time in seconds", simulationTime);
     cmd.AddValue("numPaths", "Number of parallel paths", numPaths);
     cmd.AddValue("numBadPaths", "Number of bad paths starting from path 1", numBadPaths);
     cmd.AddValue("lossRate", "Packet loss rate (0.0 - 1.0) for balancer->router links", lossRate);
+    cmd.AddValue("seed", "",seed);
     cmd.Parse(argc, argv);
 
     if ((lossRate > 0.0) && (lossRate < 1.0)) {
@@ -157,6 +158,59 @@ ThroughputSampler()
     }
 
     numBadPaths = std::min(numBadPaths, numPaths);
+
+    // ==========================================================================
+    // Генерация параметров каналов
+    // ==========================================================================
+    // Для воспроизводимости фиксируем seed (можно варьировать через параметр)
+    RngSeedManager::SetSeed(seed);
+    RngSeedManager::SetRun(1);
+    
+    std::vector<uint64_t> dataRates(numPaths);  // бит/с
+    std::vector<Time> delays(numPaths);
+    
+    Ptr<UniformRandomVariable> rand_good_rate = CreateObject<UniformRandomVariable>();
+    rand_good_rate->SetAttribute("Min", DoubleValue(50e6));   // 50 Мбит/с
+    rand_good_rate->SetAttribute("Max", DoubleValue(1e8));     // 100 Mбит/с
+
+    Ptr<UniformRandomVariable> rand_bad_rate = CreateObject<UniformRandomVariable>();
+    rand_bad_rate->SetAttribute("Min", DoubleValue(5e6));     // 5 Мбит/с
+    rand_bad_rate->SetAttribute("Max", DoubleValue(20e6));    // 20 Мбит/с
+
+    Ptr<UniformRandomVariable> rand_good_delay = CreateObject<UniformRandomVariable>();
+    rand_good_delay->SetAttribute("Min", DoubleValue(0.001));  // 1 мс в секундах
+    rand_good_delay->SetAttribute("Max", DoubleValue(0.005));  // 5 мс
+
+    Ptr<UniformRandomVariable> rand_bad_delay = CreateObject<UniformRandomVariable>();
+    rand_bad_delay->SetAttribute("Min", DoubleValue(0.010));   // 10 мс
+    rand_bad_delay->SetAttribute("Max", DoubleValue(0.020));   // 20 мс
+
+    uint64_t minBandwidth = UINT64_MAX; // для оценки узкого места (TCP NCE)
+
+    for (uint32_t i = 0; i < numPaths; ++i) {
+        if (i < numBadPaths) {
+            dataRates[i] = static_cast<uint64_t>(rand_bad_rate->GetValue());
+            delays[i] = Seconds(rand_bad_delay->GetValue());
+        } else {
+            dataRates[i] = static_cast<uint64_t>(rand_good_rate->GetValue());
+            delays[i] = Seconds(rand_good_delay->GetValue());
+        }
+        if (dataRates[i] < minBandwidth) {
+            minBandwidth = dataRates[i];
+        }
+    }
+
+#ifdef TCP_NCE_ENABLED
+    // Для NCE: узкое место — минимальная пропускная способность среди всех каналов
+    // Порог очереди = 90% от буфера (100 пакетов)
+    const uint32_t bufferPackets = 100;      // размер очереди в пакетах
+    uint32_t queueThreshold = static_cast<uint32_t>(0.9 * bufferPackets); // 90 пакетов
+    Config::SetDefault("ns3::TcpSocketBase::BottleneckBandwidth", UintegerValue(minBandwidth));
+    Config::SetDefault("ns3::TcpSocketBase::QueueThreshold", UintegerValue(queueThreshold));
+    NS_LOG_INFO("TCP NCE parameters: BottleneckBandwidth=" << minBandwidth/(1e6) << " Mbps, QueueThreshold=" << queueThreshold);
+#endif
+
+
 
     // Directories
     std::vector<std::string> resultPathParts = {"result/data"};
@@ -172,11 +226,9 @@ ThroughputSampler()
       resultPathParts.push_back(std::string("wihtout_loss"));
     }
     
-    resultPathParts.push_back(std::to_string(numPaths) + "-numPaths");
-    resultPathParts.push_back(std::to_string(numBadPaths) + "-numBadPaths");
-    resultPathParts.push_back(std::string(GOOD_DATA_RATE) + "-goodDataRate" + std::string(GOOD_DELAY) + "-goodDelay");
-    resultPathParts.push_back(std::string(BAD_DATA_RATE) + "-badDataRate" + std::string(BAD_DELAY) + "-badDelay");
-
+    resultPathParts.push_back("seeed-" +  std::to_string(seed));
+    resultPathParts.push_back("N-" +  std::to_string(numPaths));
+    resultPathParts.push_back("Nbad-" +  std::to_string(numBadPaths));
     if (ltcp) {
       resultPathParts.push_back("ltcp");
     }
@@ -230,6 +282,9 @@ ThroughputSampler()
     // ==========================================================================
     PointToPointHelper p2p;             // Хелпер для создания point-to-point соединений
     InternetStackHelper internet;       // Хелпер для установки TCP/IP стека
+
+    p2p.SetQueue("ns3::DropTailQueue",
+             "MaxSize", QueueSizeValue(QueueSize("100p")));
     
     // Устанавливаем стек интернет-протоколов на всех узлах
     internet.Install (clientNode);
@@ -243,13 +298,17 @@ ThroughputSampler()
     NetDeviceContainer clientToBalancerDevice;                // Клиент → Балансировщик
 
     // --- Настройка модели потерь (если включена) ---
-    Ptr<RateErrorModel> em = nullptr;
+    Ptr<BurstErrorModel> em = nullptr;
     if (lossEnabled && lossRate > 0.0)
     {
-        em = CreateObject<RateErrorModel>();
+        em = CreateObject<BurstErrorModel>();
         em->SetAttribute("ErrorRate", DoubleValue(lossRate));
-        em->SetAttribute("ErrorUnit", StringValue("ERROR_UNIT_PACKET"));
-        NS_LOG_INFO("Создана модель потерь с вероятностью " << lossRate);
+        
+        Ptr<UniformRandomVariable> burstSizeVar = CreateObject<UniformRandomVariable>();
+        burstSizeVar->SetAttribute("Min", DoubleValue(1));
+        burstSizeVar->SetAttribute("Max", DoubleValue(5));
+        em->SetAttribute("BurstSize", PointerValue(burstSizeVar));
+        NS_LOG_INFO("BurstErrorModel: rate=" << lossRate << " burstSize~U(1,5)");
     }
 
     // Создание высокоскоростного соединения Клиент → Балансировщик
@@ -260,13 +319,8 @@ ThroughputSampler()
     // Создание соединений Балансировщик → Маршрутизаторы
     for (uint32_t i = 0; i < numPaths; i++)
     {
-      if (i < numBadPaths) {
-        p2p.SetDeviceAttribute ("DataRate", StringValue (BAD_DATA_RATE));
-        p2p.SetChannelAttribute ("Delay", StringValue (BAD_DELAY));
-      } else {
-        p2p.SetDeviceAttribute ("DataRate", StringValue (GOOD_DATA_RATE));
-        p2p.SetChannelAttribute ("Delay", StringValue (GOOD_DELAY));
-      }
+      p2p.SetDeviceAttribute ("DataRate", DataRateValue (DataRate (dataRates[i])));
+      p2p.SetChannelAttribute ("Delay", TimeValue (delays[i]));
 
       // --- Назначение модели потерь на устройства ---
       if (em)
@@ -281,7 +335,7 @@ ThroughputSampler()
       // Сбрасываем ReceiveErrorModel, чтобы не применять к следующим линкам
       if (em)
       {
-          p2p.SetDeviceAttribute ("ReceiveErrorModel", PointerValue(CreateObject<RateErrorModel>()));
+          p2p.SetDeviceAttribute ("ReceiveErrorModel", PointerValue(CreateObject<BurstErrorModel>()));
       }
     }
 
@@ -297,30 +351,30 @@ ThroughputSampler()
     // ==========================================================================
     // ВКЛЮЧЕНИЕ ТРАССИРОВКИ ПАКЕТОВ
     // ==========================================================================
-    NS_LOG_INFO ("Включение трассировки пакетов...");
-    // Клиент -> Балансировщик
-    p2p.EnablePcap("result/client-balancer", clientToBalancerDevice.Get(0)); // клиент
-    p2p.EnablePcap("result/balancer-client", clientToBalancerDevice.Get(1)); // балансировщик
+    // NS_LOG_INFO ("Включение трассировки пакетов...");
+    // // Клиент -> Балансировщик
+    // p2p.EnablePcap("result/client-balancer", clientToBalancerDevice.Get(0)); // клиент
+    // p2p.EnablePcap("result/balancer-client", clientToBalancerDevice.Get(1)); // балансировщик
 
-    // Балансировщик -> Маршрутизаторы
-    for (uint32_t i = 0; i < numPaths; i++) {
-        // Балансировщик (интерфейс i+2) -> Маршрутизатор i
-        p2p.EnablePcap("result/balancer-router-" + std::to_string(i+2) + "-1", 
-                      balancerToRouterDevices[i].Get(0)); // балансировщик
+    // // Балансировщик -> Маршрутизаторы
+    // for (uint32_t i = 0; i < numPaths; i++) {
+    //     // Балансировщик (интерфейс i+2) -> Маршрутизатор i
+    //     p2p.EnablePcap("result/balancer-router-" + std::to_string(i+2) + "-1", 
+    //                   balancerToRouterDevices[i].Get(0)); // балансировщик
         
-        p2p.EnablePcap("result/balancer-router-" + std::to_string(i+2) + "-2", 
-                      balancerToRouterDevices[i].Get(1)); // маршрутизатор i
-    }
+    //     p2p.EnablePcap("result/balancer-router-" + std::to_string(i+2) + "-2", 
+    //                   balancerToRouterDevices[i].Get(1)); // маршрутизатор i
+    // }
 
-    // Маршрутизаторы -> Сервер
-    for (uint32_t i = 0; i < numPaths; i++) {
-        // Маршрутизатор i -> Сервер (интерфейс i+1)
-        p2p.EnablePcap("result/router-server-1-" + std::to_string(i+1), 
-                      routerToServerDevices[i].Get(0)); // маршрутизатор i
+    // // Маршрутизаторы -> Сервер
+    // for (uint32_t i = 0; i < numPaths; i++) {
+    //     // Маршрутизатор i -> Сервер (интерфейс i+1)
+    //     p2p.EnablePcap("result/router-server-1-" + std::to_string(i+1), 
+    //                   routerToServerDevices[i].Get(0)); // маршрутизатор i
         
-        p2p.EnablePcap("result/router-server-2-" + std::to_string(i+1), 
-                      routerToServerDevices[i].Get(1)); // сервер
-    }
+    //     p2p.EnablePcap("result/router-server-2-" + std::to_string(i+1), 
+    //                   routerToServerDevices[i].Get(1)); // сервер
+    // }
 
     // ==========================
     // IP addressing
@@ -508,33 +562,33 @@ ThroughputSampler()
 
 
 
-    NS_LOG_INFO ("Таблица маршрутизации балансировщика:");
-    balancerNode.Get(0)->GetObject<Ipv4>()->GetRoutingProtocol()->PrintRoutingTable (routingStream, Time::S);
+    // NS_LOG_INFO ("Таблица маршрутизации балансировщика:");
+    // balancerNode.Get(0)->GetObject<Ipv4>()->GetRoutingProtocol()->PrintRoutingTable (routingStream, Time::S);
 
-    NS_LOG_INFO("Маршруты сервера:");
-    serverIpv4 = serverNode.Get(0)->GetObject<Ipv4>();
-    if (serverIpv4) {
-        Ptr<Ipv4RoutingProtocol> serverRouting = serverIpv4->GetRoutingProtocol();
-        if (serverRouting) {
-            serverRouting->PrintRoutingTable(routingStream, Time::S);
-        } else {
-            NS_LOG_ERROR("На сервере нет протокола маршрутизации");
-        }
-    }
+    // NS_LOG_INFO("Маршруты сервера:");
+    // serverIpv4 = serverNode.Get(0)->GetObject<Ipv4>();
+    // if (serverIpv4) {
+    //     Ptr<Ipv4RoutingProtocol> serverRouting = serverIpv4->GetRoutingProtocol();
+    //     if (serverRouting) {
+    //         serverRouting->PrintRoutingTable(routingStream, Time::S);
+    //     } else {
+    //         NS_LOG_ERROR("На сервере нет протокола маршрутизации");
+    //     }
+    // }
 
-    // Проверяем маршрутизаторы
-    for (uint32_t i = 0; i < numPaths; i++) {
-        NS_LOG_INFO("Маршруты маршрутизатора " << i << ":");
-        Ptr<Ipv4> routerIpv4 = routerNodes.Get(i)->GetObject<Ipv4>();
-        if (routerIpv4) {
-            Ptr<Ipv4RoutingProtocol> routerRouting = routerIpv4->GetRoutingProtocol();
-            if (routerRouting) {
-                routerRouting->PrintRoutingTable(routingStream, Time::S);
-            } else {
-                NS_LOG_ERROR("На маршрутизаторе " << i << " нет протокола маршрутизации");
-            }
-        }
-    }
+    // // Проверяем маршрутизаторы
+    // for (uint32_t i = 0; i < numPaths; i++) {
+    //     NS_LOG_INFO("Маршруты маршрутизатора " << i << ":");
+    //     Ptr<Ipv4> routerIpv4 = routerNodes.Get(i)->GetObject<Ipv4>();
+    //     if (routerIpv4) {
+    //         Ptr<Ipv4RoutingProtocol> routerRouting = routerIpv4->GetRoutingProtocol();
+    //         if (routerRouting) {
+    //             routerRouting->PrintRoutingTable(routingStream, Time::S);
+    //         } else {
+    //             NS_LOG_ERROR("На маршрутизаторе " << i << " нет протокола маршрутизации");
+    //         }
+    //     }
+    // }
     
 
     // ==========================================================================

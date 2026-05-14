@@ -1,0 +1,2 @@
+#Time(s) Cwnd(bytes) Context
+2.06514 1440 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow

@@ -1,0 +1,6 @@
+#Time(s) Rtt(s) Context
+1.20245 0.104651 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/RTT
+1.20454 0.111694 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/RTT
+1.20644 0.118107 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/RTT
+1.2074 0.123844 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/RTT
+1.20944 0.129114 /NodeList/0/$ns3::TcpL4Protocol/SocketList/0/RTT

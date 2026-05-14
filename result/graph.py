@@ -9,7 +9,7 @@ import numpy as np
 
 DATA_DIR = Path("result/data")
 GRAPH_DIR = Path("result/graph")
-SUPPORTED_METRICS = {"cwnd", "rtt", "throughput"}
+SUPPORTED_METRICS = {"cwnd", "rtt"}
 MSS = 1440
 
 
@@ -171,8 +171,13 @@ def prepare_plot_data(data_file: Path):
 
 
 def configure_axis_ticks(axis, plot_data: PlotData):
-    axis.set_xlim(1, 10)
-    axis.xaxis.set_major_locator(FixedLocator(np.arange(1, 11, 1)))
+    t_min = 1.0
+    t_max = np.max(plot_data.time_values)
+    if t_max <= t_min:
+        t_max = t_min + 1  # защита от пустых данных
+    axis.set_xlim(t_min, t_max)
+
+    axis.xaxis.set_major_locator(plt.MaxNLocator(10))
     axis.xaxis.set_minor_locator(AutoMinorLocator(2))
 
     if plot_data.metric_name == "rtt":
