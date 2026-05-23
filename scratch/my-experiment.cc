@@ -562,33 +562,33 @@ ThroughputSampler()
 
 
 
-    // NS_LOG_INFO ("Таблица маршрутизации балансировщика:");
-    // balancerNode.Get(0)->GetObject<Ipv4>()->GetRoutingProtocol()->PrintRoutingTable (routingStream, Time::S);
+    NS_LOG_INFO ("Таблица маршрутизации балансировщика:");
+    balancerNode.Get(0)->GetObject<Ipv4>()->GetRoutingProtocol()->PrintRoutingTable (routingStream, Time::S);
 
-    // NS_LOG_INFO("Маршруты сервера:");
-    // serverIpv4 = serverNode.Get(0)->GetObject<Ipv4>();
-    // if (serverIpv4) {
-    //     Ptr<Ipv4RoutingProtocol> serverRouting = serverIpv4->GetRoutingProtocol();
-    //     if (serverRouting) {
-    //         serverRouting->PrintRoutingTable(routingStream, Time::S);
-    //     } else {
-    //         NS_LOG_ERROR("На сервере нет протокола маршрутизации");
-    //     }
-    // }
+    NS_LOG_INFO("Маршруты сервера:");
+    serverIpv4 = serverNode.Get(0)->GetObject<Ipv4>();
+    if (serverIpv4) {
+        Ptr<Ipv4RoutingProtocol> serverRouting = serverIpv4->GetRoutingProtocol();
+        if (serverRouting) {
+            serverRouting->PrintRoutingTable(routingStream, Time::S);
+        } else {
+            NS_LOG_ERROR("На сервере нет протокола маршрутизации");
+        }
+    }
 
-    // // Проверяем маршрутизаторы
-    // for (uint32_t i = 0; i < numPaths; i++) {
-    //     NS_LOG_INFO("Маршруты маршрутизатора " << i << ":");
-    //     Ptr<Ipv4> routerIpv4 = routerNodes.Get(i)->GetObject<Ipv4>();
-    //     if (routerIpv4) {
-    //         Ptr<Ipv4RoutingProtocol> routerRouting = routerIpv4->GetRoutingProtocol();
-    //         if (routerRouting) {
-    //             routerRouting->PrintRoutingTable(routingStream, Time::S);
-    //         } else {
-    //             NS_LOG_ERROR("На маршрутизаторе " << i << " нет протокола маршрутизации");
-    //         }
-    //     }
-    // }
+    // Проверяем маршрутизаторы
+    for (uint32_t i = 0; i < numPaths; i++) {
+        NS_LOG_INFO("Маршруты маршрутизатора " << i << ":");
+        Ptr<Ipv4> routerIpv4 = routerNodes.Get(i)->GetObject<Ipv4>();
+        if (routerIpv4) {
+            Ptr<Ipv4RoutingProtocol> routerRouting = routerIpv4->GetRoutingProtocol();
+            if (routerRouting) {
+                routerRouting->PrintRoutingTable(routingStream, Time::S);
+            } else {
+                NS_LOG_ERROR("На маршрутизаторе " << i << " нет протокола маршрутизации");
+            }
+        }
+    }
     
 
     // ==========================================================================

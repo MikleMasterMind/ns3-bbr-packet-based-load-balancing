@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Сравнительные графики CWND, RTT, Throughput с заливкой min‑max и средней линией.
-Для каждого метода (base, ltcp, nce) заливается область между минимальным и максимальным
-значением по всем seed'ам. Центральная линия — среднее арифметическое по всем seed'ам.
+Сравнительные графики CWND, RTT, Throughput с заливкой min‑max и средней линией,
+единый масштаб по оси Y для всех Nbad при одинаковых loss, N, metric.
 """
 
 from collections import defaultdict
@@ -12,7 +11,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.ticker import AutoMinorLocator, MaxNLocator
 
-# ------------------ глобальные настройки графиков ------------------
 plt.rcParams.update({
     'font.size': 14,
     'axes.titlesize': 18,
@@ -22,7 +20,6 @@ plt.rcParams.update({
     'ytick.labelsize': 14,
 })
 
-# ------------------ конфигурация ------------------
 DATA_DIR = Path("result/data")
 GRAPH_DIR = Path("result/graph")
 SUPPORTED_METRICS = {"cwnd", "rtt", "throughput"}
@@ -168,12 +165,14 @@ def group_files(files: List[Path]) -> Dict[Tuple, Dict[str, Dict[int, Path]]]:
             result[key] = dict(method_dict)
     return result
 
-# ---------- построение ----------
-def plot_experiment_group(key: Tuple, method_seed_paths: Dict[str, Dict[int, Path]]):
+# ---------- построение графика или сбор максимального значения ----------
+def plot_experiment_group(key: Tuple, method_seed_paths: Dict[str, Dict[int, Path]],
+                          collect_only: bool = False,
+                          y_max_override: Optional[float] = None):
     loss, N, Nbad, metric = key
     available_methods = [m for m in METHODS if m in method_seed_paths]
     if not available_methods:
-        return
+        return None if collect_only else None
 
     seeds = set()
     for m in available_methods:
@@ -181,16 +180,19 @@ def plot_experiment_group(key: Tuple, method_seed_paths: Dict[str, Dict[int, Pat
     seeds = sorted(seeds)
     seed_str = f"seeds {min(seeds)}-{max(seeds)}" if len(seeds) > 1 else f"seed {seeds[0]}"
 
-    print(f"Строю группу: loss={loss}, N={N}, Nbad={Nbad}, metric={metric}, methods={available_methods}, {seed_str}")
+    if not collect_only:
+        print(f"Строю группу: loss={loss}, N={N}, Nbad={Nbad}, metric={metric}, "
+              f"methods={available_methods}, {seed_str}")
 
-    fig, ax = plt.subplots(figsize=(12, 8))
+    # сбор данных
     y_max_global = 0
     t_max_global = 0
     y_label = ""
+    all_seed_data = {}   # method -> seed_data
 
     for method in available_methods:
         seed_paths = method_seed_paths[method]
-        seed_data = {}   # seed -> (time, plot_values)
+        seed_data = {}
         for seed, path in seed_paths.items():
             parsed = read_trace_file(path)
             if parsed is None:
@@ -204,42 +206,50 @@ def plot_experiment_group(key: Tuple, method_seed_paths: Dict[str, Dict[int, Pat
             if len(time) == 0:
                 continue
             plot_values, lbl = transform_values(metric, values)
-            y_label = lbl
+            if not y_label:
+                y_label = lbl
             seed_data[seed] = (time, plot_values)
             y_max_global = max(y_max_global, np.max(plot_values))
             t_max_global = max(t_max_global, np.max(time))
 
-        if not seed_data:
-            continue
+        if seed_data:
+            all_seed_data[method] = seed_data
 
-        # интерполяция на общую сетку
+    if not all_seed_data:
+        return None if collect_only else None
+
+    # Если только сбор максимума – возвращаем его
+    if collect_only:
+        return y_max_global
+
+    # --- построение ---
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    for method in available_methods:
+        if method not in all_seed_data:
+            continue
+        seed_data = all_seed_data[method]
         t_min = min(np.min(t) for t, _ in seed_data.values())
         t_max = max(np.max(t) for t, _ in seed_data.values())
         t_common = np.linspace(t_min, t_max, 500)
         interp_matrix = []
         for seed, (t, vals) in seed_data.items():
             interp_matrix.append(np.interp(t_common, t, vals))
-        interp_matrix = np.array(interp_matrix)   # shape (n_seeds, len(t_common))
+        interp_matrix = np.array(interp_matrix)
 
         min_curve = np.min(interp_matrix, axis=0)
         max_curve = np.max(interp_matrix, axis=0)
+        mean_curve = np.mean(interp_matrix, axis=0)
 
-        # заливка min-max
         color = COLORS.get(method, 'gray')
         ax.fill_between(t_common, min_curve, max_curve, color=color, alpha=0.2)
-
-        # среднее арифметическое
-        mean_curve = np.mean(interp_matrix, axis=0)
         label = METHOD_LABELS.get(method, method.upper())
         ax.plot(t_common, mean_curve, linewidth=2.0, color=color, label=label)
 
-    if y_max_global == 0:
-        print("  Нет данных для построения группы")
-        plt.close(fig)
-        return
-
     ax.set_xlim(1.0, t_max_global * 1.02)
-    ax.set_ylim(0, y_max_global * 1.05)
+    # Используем переданный максимум или локальный
+    y_max = y_max_override if y_max_override is not None else y_max_global
+    ax.set_ylim(0, y_max * 1.05)
     ax.set_xlabel("Time (s)")
     ax.set_ylabel(y_label)
     title = (f"{metric.upper()} (loss={loss}, N={N}, Nbad={Nbad}, {seed_str})")
@@ -251,8 +261,6 @@ def plot_experiment_group(key: Tuple, method_seed_paths: Dict[str, Dict[int, Pat
     ax.xaxis.set_minor_locator(AutoMinorLocator(2))
     ax.yaxis.set_major_locator(MaxNLocator(16))
     ax.yaxis.set_minor_locator(AutoMinorLocator(4))
-
-    # настройка толщины и размера делений
     ax.tick_params(axis="both", which="major")
     ax.tick_params(axis="both", which="minor", length=3)
 
@@ -277,8 +285,22 @@ def main():
         print("Не найдено ни одной группы")
         return
 
+    # Первый проход: собираем максимальные значения Y для каждого (loss, N, metric)
+    max_vals = defaultdict(float)   # ключ (loss, N, metric) -> max
     for key, method_seed_paths in groups.items():
-        plot_experiment_group(key, method_seed_paths)
+        y_max = plot_experiment_group(key, method_seed_paths, collect_only=True)
+        if y_max is not None:
+            loss, N, Nbad, metric = key
+            base_key = (loss, N, metric)
+            if y_max > max_vals[base_key]:
+                max_vals[base_key] = y_max
+
+    # Второй проход: строим с единым верхним пределом Y
+    for key, method_seed_paths in groups.items():
+        loss, N, Nbad, metric = key
+        base_key = (loss, N, metric)
+        plot_experiment_group(key, method_seed_paths,
+                              y_max_override=max_vals[base_key])
 
 if __name__ == "__main__":
     main()
