@@ -134,12 +134,12 @@ ThroughputSampler()
     bool lossEnabled = false;
     double lossRate = 0.0;
     
-    bool ltcp = false;
+    //bool ltcp = false;
     #ifdef LTCP_ENABLED
     ltcp = true;
     #endif
 
-    bool nce = false;
+    //bool nce = false;
     #ifdef TCP_NCE_ENABLED
     nce = true;
     #endif
@@ -189,11 +189,15 @@ ThroughputSampler()
 
     for (uint32_t i = 0; i < numPaths; ++i) {
         if (i < numBadPaths) {
-            dataRates[i] = static_cast<uint64_t>(rand_bad_rate->GetValue());
-            delays[i] = Seconds(rand_bad_delay->GetValue());
+            // dataRates[i] = static_cast<uint64_t>(rand_bad_rate->GetValue());
+            // delays[i] = Seconds(rand_bad_delay->GetValue());
+            dataRates[i] = 10e6;
+            delays[i] = Seconds(0.01);
         } else {
-            dataRates[i] = static_cast<uint64_t>(rand_good_rate->GetValue());
-            delays[i] = Seconds(rand_good_delay->GetValue());
+            // dataRates[i] = static_cast<uint64_t>(rand_good_rate->GetValue());
+            // delays[i] = Seconds(rand_good_delay->GetValue());
+            dataRates[i] = 10e7;
+            delays[i] = Seconds(0.001);
         }
         if (dataRates[i] < minBandwidth) {
             minBandwidth = dataRates[i];
@@ -215,30 +219,31 @@ ThroughputSampler()
     // Directories
     std::vector<std::string> resultPathParts = {"result/data"};
     // Добавляем информацию о потерях в путь
-    if (lossEnabled)
-    {
-      std::ostringstream lossStr;
-      lossStr << "loss-" << lossRate;
-      resultPathParts.push_back(lossStr.str());
-    }
-    else
-    {
-      resultPathParts.push_back(std::string("wihtout_loss"));
-    }
+    // if (lossEnabled)
+    // {
+    //   std::ostringstream lossStr;
+    //   lossStr << "loss-" << lossRate;
+    //   resultPathParts.push_back(lossStr.str());
+    // }
+    // else
+    // {
+    //   resultPathParts.push_back(std::string("wihtout_loss"));
+    // }
     
-    resultPathParts.push_back("seeed-" +  std::to_string(seed));
-    resultPathParts.push_back("N-" +  std::to_string(numPaths));
-    resultPathParts.push_back("Nbad-" +  std::to_string(numBadPaths));
-    if (ltcp) {
-      resultPathParts.push_back("ltcp");
-    }
-    else if (nce) {
-        resultPathParts.push_back("nce");
-    }
-    else 
-    {
-        resultPathParts.push_back("base");
-    }
+    // resultPathParts.push_back("seeed-" +  std::to_string(seed));
+    // resultPathParts.push_back("N-" +  std::to_string(numPaths));
+    // resultPathParts.push_back("Nbad-" +  std::to_string(numBadPaths));
+    // if (ltcp) {
+    //   resultPathParts.push_back("ltcp");
+    // }
+    // else if (nce) {
+    //     resultPathParts.push_back("nce");
+    // }
+    // else 
+    // {
+    //     resultPathParts.push_back("base");
+    // }
+    resultPathParts.push_back("base-problem");
     std::ostringstream dirBuilder;
     for (const auto& part : resultPathParts)
     {
