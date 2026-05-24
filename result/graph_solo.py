@@ -58,9 +58,7 @@ def main():
     plt.plot(time, cwnd_seg, linewidth=1.2)
     plt.xlabel("Time (s)")
     plt.ylabel(f"CWND (segments, MSS={MSS} bytes)")
-    title = f"CWND – {file_path.name}"
-    if header:
-        title += f"\n{header}"
+    title = f"CWND trace for TCP CUBIC"
     plt.title(title)
     plt.grid(True, which="both", linestyle="--", alpha=0.5)
     plt.xlim(0, None)

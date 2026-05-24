@@ -8,4 +8,4 @@
 #define MAX_FOLLOWING_LOSS 2
 
 //#define LTCP_ENABLED
-//#define TCP_NCE_ENABLED
+#define TCP_NCE_ENABLED
