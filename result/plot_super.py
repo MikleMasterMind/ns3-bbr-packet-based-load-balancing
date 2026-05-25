@@ -2,6 +2,7 @@
 """
 Сравнительные графики CWND, RTT, Throughput с заливкой min‑max и средней линией,
 единый масштаб по оси Y для всех Nbad при одинаковых loss, N, metric.
+Масштаб определяется по 99-му процентилю данных методов LTCP и NCE (base исключён).
 """
 
 from collections import defaultdict
@@ -184,13 +185,17 @@ def plot_experiment_group(key: Tuple, method_seed_paths: Dict[str, Dict[int, Pat
         print(f"Строю группу: loss={loss}, N={N}, Nbad={Nbad}, metric={metric}, "
               f"methods={available_methods}, {seed_str}")
 
-    # сбор данных
-    y_max_global = 0
+    all_values = []      # для сбора процентиля
+    y_max_global = 0     # локальный максимум на случай, если нет override
     t_max_global = 0
     y_label = ""
     all_seed_data = {}   # method -> seed_data
 
     for method in available_methods:
+        # В режиме сбора масштаба base не учитываем (чтобы не завышал)
+        if collect_only and method == 'base':
+            continue
+
         seed_paths = method_seed_paths[method]
         seed_data = {}
         for seed, path in seed_paths.items():
@@ -209,18 +214,23 @@ def plot_experiment_group(key: Tuple, method_seed_paths: Dict[str, Dict[int, Pat
             if not y_label:
                 y_label = lbl
             seed_data[seed] = (time, plot_values)
-            y_max_global = max(y_max_global, np.max(plot_values))
-            t_max_global = max(t_max_global, np.max(time))
+            if collect_only:
+                all_values.extend(plot_values.tolist())
+            else:
+                y_max_global = max(y_max_global, np.max(plot_values))
+                t_max_global = max(t_max_global, np.max(time))
 
-        if seed_data:
+        if seed_data and not collect_only:
             all_seed_data[method] = seed_data
 
-    if not all_seed_data:
-        return None if collect_only else None
-
-    # Если только сбор максимума – возвращаем его
     if collect_only:
-        return y_max_global
+        if all_values:
+            # 99-й процентиль для отсечения выбросов
+            return np.percentile(all_values, 99)
+        return 0.0
+
+    if not all_seed_data:
+        return
 
     # --- построение ---
     fig, ax = plt.subplots(figsize=(12, 8))
@@ -247,7 +257,6 @@ def plot_experiment_group(key: Tuple, method_seed_paths: Dict[str, Dict[int, Pat
         ax.plot(t_common, mean_curve, linewidth=2.0, color=color, label=label)
 
     ax.set_xlim(1.0, t_max_global * 1.02)
-    # Используем переданный максимум или локальный
     y_max = y_max_override if y_max_override is not None else y_max_global
     ax.set_ylim(0, y_max * 1.05)
     ax.set_xlabel("Time (s)")
@@ -285,8 +294,8 @@ def main():
         print("Не найдено ни одной группы")
         return
 
-    # Первый проход: собираем максимальные значения Y для каждого (loss, N, metric)
-    max_vals = defaultdict(float)   # ключ (loss, N, metric) -> max
+    # Первый проход: собираем единый верхний предел для (loss, N, metric)
+    max_vals = defaultdict(float)
     for key, method_seed_paths in groups.items():
         y_max = plot_experiment_group(key, method_seed_paths, collect_only=True)
         if y_max is not None:
@@ -295,7 +304,7 @@ def main():
             if y_max > max_vals[base_key]:
                 max_vals[base_key] = y_max
 
-    # Второй проход: строим с единым верхним пределом Y
+    # Второй проход: строим графики с одинаковым масштабом Y
     for key, method_seed_paths in groups.items():
         loss, N, Nbad, metric = key
         base_key = (loss, N, metric)
